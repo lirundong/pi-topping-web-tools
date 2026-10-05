@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Tested against pi 1.0.3. No break: the extension-facing declaration surface is unchanged apart from additive `registerToolRenderer`/`ToolRenderers`, pi-ai adds `samplingParamsByThinkingLevel` and renames the Azure provider (unused here), and pi-tui's Home/End default change does not reach these tools.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.0 to 1.0.3.
+
 ## [0.2.6] - 2026-10-02
 
 ### Changed
