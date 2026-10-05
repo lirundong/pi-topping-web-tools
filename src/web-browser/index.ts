@@ -173,7 +173,7 @@ async function truncateTextResult(
 		const tempDir = await mkdtemp(join(tmpdir(), "pi-web-browser-"));
 		const tempFile = join(tempDir, "output.txt");
 		await withFileMutationQueue(tempFile, async () => {
-			await writeFile(tempFile, text, "utf-8");
+			await writeFile(tempFile, text, { encoding: "utf-8", mode: 0o600 });
 		});
 
 		outDetails.fullOutputPath = tempFile;
@@ -195,7 +195,7 @@ async function saveScreenshotToTempFile(shot: ScreenshotResult): Promise<string>
 	const tempFile = join(tempDir, "screenshot.png");
 	const buf = Buffer.from(shot.data, "base64");
 	await withFileMutationQueue(tempFile, async () => {
-		await writeFile(tempFile, buf);
+		await writeFile(tempFile, buf, { mode: 0o600 });
 	});
 	return tempFile;
 }
