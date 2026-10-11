@@ -343,7 +343,7 @@ export default function (pi: ExtensionAPI) {
 			"Use get_content only when DOM structure or attributes are needed; it returns raw HTML.",
 			"On SPA sites, use wait_for after navigate (selector/state or networkidle) before click/type.",
 			"Use screenshot for visual verification (requires a vision-capable model); use toFile=true to save PNG to disk instead of base64.",
-			"Image content is not visible to a codemode script: a script receives only a tool result's text blocks, so a screenshot taken from one returns its caption without the pixels. Call screenshot directly, or with toFile=true to get a file path the script can read.",
+			"Image content is not visible to a codemode script for tools without an output schema, such as web_browser. For a screenshot, call web_browser with action screenshot and toFile=true. Pass the returned path to tools.read({ path }), then pass its image block to image().",
 			"Use get_console_logs when JavaScript errors or console output may explain page behavior.",
 			"Use get_network_logs when failed, egress-blocked, or 4xx/5xx requests may explain page behavior. Navigate directly to a blocked origin to request approval.",
 			"Use set_cookies to inject cookies for authenticated flows after manual login.",

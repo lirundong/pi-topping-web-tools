@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Tested against pi 1.1.0. No break: typecheck, 226 tests, 30/30 smoke checks with `PI_SUPPRESS_NOTIFICATIONS` unset, and the RPC load check pass.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.3 to 1.1.0.
+- `web_browser`: the codemode screenshot guideline now points at `tools.read({ path })` plus `image()`, which works on pi 1.0.4+ where the built-in `read` returns an image block for image files. The older rule still holds for `web_browser` itself, which declares no output schema, so a script still receives only the screenshot's caption. Guideline count stays 16.
+- README: documented the codemode `inlineBudget` default of 3000 estimated tokens, which omits `web_browser` from the `only`-mode tool listing when these seven tools are loaded (about 3716 tokens are needed), and the `tools.read` + `image()` path for inspecting a saved screenshot from a codemode script, including the pre-1.0.4 host note.
+
 ## [0.2.7] - 2026-10-05
 
 ### Changed

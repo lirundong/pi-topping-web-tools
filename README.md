@@ -61,6 +61,17 @@ All three tools are `direct`-exposure and pi activates those on registration (`d
 - To hide a tool for a session, name it in `--exclude-tools` (or start with `--no-tools` and re-add what you want with `--tools`).
 - To change the startup set in your `settings.json`, use `defaultTools`. Bare names **replace** pi's defaults, so write `"+fetch_markdown"` to add a tool without dropping `read`, `bash`, `edit`, and `write`. On pi 0.99.2+, `/reload` activates tools **newly added** to `defaultTools` without a restart. The reverse does not follow: a tool **removed** from `defaultTools` stays active until you restart, and a tool you turned off during the session stays off. `--tools`, `--no-tools`, and `--no-builtin-tools` still override the setting, on reload as well.
 
+### Codemode tool listing
+
+With `codemode.mode: "only"`, the `codemode` description lists every tool a script can call instead of the model calling those tools directly. Those declarations carry each tool's prompt guidelines and share `codemode.inlineBudget`, which defaults to 3000 estimated tokens (characters / 4); tools that do not fit are left out and are reached with `searchTools()` or `describeTool()`. On pi 1.0.4+, where guidelines are part of the listing, the seven-tool catalog `fetch_markdown`, `pdf_extract`, `web_browser`, plus built-in `read`, `bash`, `edit`, and `write` needs about 3716 tokens — `web_browser` alone is about 1568, the largest section — so the default budget drops `web_browser` from that list. Set the budget to at least 3716 if you use `only` with these tools; real sessions that load more extensions need more.
+
+```json
+{
+  "codemode.mode": "only",
+  "codemode.inlineBudget": 4096
+}
+```
+
 ## `fetch_markdown`
 
 Complements pi's built-in search-backed `web_fetch` with a lightweight, keyless fetch path for public documentation, READMEs, and articles:
@@ -142,7 +153,7 @@ When `screenshot` returns an inline result (`toFile` omitted or `false`), `web_b
 
 `toFile=true` and `/browser-screenshot` save the original PNG to disk and put only the path and dimensions in the tool result. The file is resized only if a later `read` or `@file` attachment sends it to the model.
 
-In codemode, a tool result exposes only its text blocks, so an inline `screenshot` reaches the script as its caption with no image bytes. Call `screenshot` directly from the session, or pass `toFile=true` and read the saved path from the script.
+In codemode, a tool result exposes only its text blocks, so an inline `screenshot` reaches the script as its caption with no image bytes. To let a script inspect a screenshot, take it with `toFile=true` and read the saved path: on pi 1.0.4+, `tools.read({ path })` resolves an image file to an image block, and `image()` adds that block to the script output. On pi before 1.0.4, `read` resolves an image file to its text, so the pixels are not reachable from a script — call `screenshot` directly from the session on those hosts.
 
 The resize fields are:
 
