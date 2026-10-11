@@ -6,6 +6,8 @@
  * hostname/path-prefix (matches the prefix and its descendants).
  */
 
+import { isAbsolute, relative } from "node:path";
+
 export const PREAPPROVED_HOSTS = new Set([
 	"platform.claude.com",
 	"code.claude.com",
@@ -114,6 +116,11 @@ const { HOSTNAME_ONLY, PATH_PREFIXES } = (() => {
 	}
 	return { HOSTNAME_ONLY: hosts, PATH_PREFIXES: paths };
 })();
+
+export function isInsideCwd(resolvedPath: string): boolean {
+	const rel = relative(process.cwd(), resolvedPath);
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
 
 export function permissionKey(url: string): string {
 	try {

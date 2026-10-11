@@ -9,7 +9,6 @@ import {
 	DEFAULT_MAX_LINES,
 	formatSize,
 	truncateHead,
-	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
@@ -25,7 +24,6 @@ import {
 	type NavigateResult,
 	type NetworkEntry,
 	type ScreenshotResult,
-	type SetCookieParam,
 	type TabInfo,
 } from "./browser-manager.ts";
 import { buildOriginChecker } from "./egress-policy.ts";
@@ -33,8 +31,7 @@ import { checkUrlPermission, upgradeHttpToHttps, validateURL } from "./permissio
 import { requestHostPermission } from "../permission-prompt.ts";
 import { BoundedPreview, clipField, resultText } from "../render-preview.ts";
 import { listGrants } from "../permission-store.ts";
-import { permissionKey } from "../permissions.ts";
-import { isInsideCwd } from "../pdf-extract.ts";
+import { isInsideCwd, permissionKey } from "../permissions.ts";
 import { suppressNotifications } from "../env.ts";
 import { publishBrowserState, registerBrowserFeeds } from "./feeds.ts";
 
@@ -135,6 +132,8 @@ function formatTabs(tabs: TabInfo[]): string {
 		.join("\n");
 }
 
+const sanitizeTitle = (title: string) => clipField(title.replace(/[\u0000-\u001f\u007f]/g, " "));
+
 function wrapUntrustedContent(url: string, text: string): string {
 	const safeUrl = url.replaceAll('"', "%22");
 	const safeText = text.replaceAll(/<\/(untrusted-content)/gi, "<\\/$1");
@@ -157,6 +156,13 @@ async function resolveLocalFilePath(input: string): Promise<string> {
 	}
 }
 
+async function writeTempFile(name: string, data: string | Buffer): Promise<string> {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-web-browser-"));
+	const tempFile = join(tempDir, name);
+	await writeFile(tempFile, data, { mode: 0o600 });
+	return tempFile;
+}
+
 async function truncateTextResult(
 	text: string,
 	details: WebBrowserDetails,
@@ -170,12 +176,7 @@ async function truncateTextResult(
 	const outDetails = { ...details, bytes: truncation.totalBytes };
 
 	if (truncation.truncated) {
-		const tempDir = await mkdtemp(join(tmpdir(), "pi-web-browser-"));
-		const tempFile = join(tempDir, "output.txt");
-		await withFileMutationQueue(tempFile, async () => {
-			await writeFile(tempFile, text, { encoding: "utf-8", mode: 0o600 });
-		});
-
+		const tempFile = await writeTempFile("output.txt", text);
 		outDetails.fullOutputPath = tempFile;
 
 		const truncatedLines = truncation.totalLines - truncation.outputLines;
@@ -188,16 +189,6 @@ async function truncateTextResult(
 	}
 
 	return { text: resultText, details: outDetails };
-}
-
-async function saveScreenshotToTempFile(shot: ScreenshotResult): Promise<string> {
-	const tempDir = await mkdtemp(join(tmpdir(), "pi-web-browser-"));
-	const tempFile = join(tempDir, "screenshot.png");
-	const buf = Buffer.from(shot.data, "base64");
-	await withFileMutationQueue(tempFile, async () => {
-		await writeFile(tempFile, buf, { mode: 0o600 });
-	});
-	return tempFile;
 }
 
 function browserStatus(ctx: ExtensionContext, text: string, tone: "success" | "muted"): string {
@@ -293,7 +284,7 @@ export default function (pi: ExtensionAPI) {
 				"Web Browser:",
 				`  Status: ${info.isOpen ? "open" : "closed"}`,
 				`  URL: ${info.url ? clipField(info.url) : "(none)"}`,
-				`  Title: ${info.title ? clipField(info.title.replace(/[\u0000-\u001f\u007f]/g, " ")) : "(none)"}`,
+				`  Title: ${info.title ? sanitizeTitle(info.title) : "(none)"}`,
 				`  Tabs open: ${info.tabCount}`,
 				`  Console messages: ${info.consoleCount}`,
 				`  Network issues: ${info.networkCount}`,
@@ -325,7 +316,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const shot = await browser.screenshot({ fullPage: true });
-			const tempFile = await saveScreenshotToTempFile(shot);
+			const tempFile = await writeTempFile("screenshot.png", Buffer.from(shot.data, "base64"));
 			const dims = `${shot.width}×${shot.height}`;
 			ctx.ui.notify(`Screenshot saved to: ${tempFile}\nDimensions: ${dims} (full page)`, "info");
 		},
@@ -343,7 +334,7 @@ export default function (pi: ExtensionAPI) {
 			"Use get_content only when DOM structure or attributes are needed; it returns raw HTML.",
 			"On SPA sites, use wait_for after navigate (selector/state or networkidle) before click/type.",
 			"Use screenshot for visual verification (requires a vision-capable model); use toFile=true to save PNG to disk instead of base64.",
-			"Image content is not visible to a codemode script for tools without an output schema, such as web_browser. For a screenshot, call web_browser with action screenshot and toFile=true. Pass the returned path to tools.read({ path }), then pass its image block to image().",
+			"Image content is not visible to a codemode script for tools without an output schema, such as web_browser. For a screenshot, call web_browser with action screenshot and toFile=true; its result starts with 'Screenshot saved to: <path>'. On pi 1.0.4+, pass that path to tools.read({ path }), then pass its image block to image(); on earlier hosts, call screenshot directly instead of from a script.",
 			"Use get_console_logs when JavaScript errors or console output may explain page behavior.",
 			"Use get_network_logs when failed, egress-blocked, or 4xx/5xx requests may explain page behavior. Navigate directly to a blocked origin to request approval.",
 			"Use set_cookies to inject cookies for authenticated flows after manual login.",
@@ -475,7 +466,7 @@ export default function (pi: ExtensionAPI) {
 		annotations: { readOnlyHint: false, openWorldHint: true },
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const action = params.action as WebBrowserAction;
+			const action = params.action;
 			const timeout = params.timeout;
 
 			onUpdate?.({ content: [{ type: "text", text: `${action}…` }], details: { action } });
@@ -513,13 +504,14 @@ export default function (pi: ExtensionAPI) {
 						const result: NavigateResult = await mgr.navigate(upgraded, { timeout, signal });
 						syncBrowserOpen(ctx, result.url);
 
-						const text = `Navigated to ${result.url}\nTitle: ${result.title}${result.statusCode ? `\nStatus: ${result.statusCode}` : ""}`;
+						const title = sanitizeTitle(result.title);
+						const text = `Navigated to ${result.url}${result.statusCode ? `\nStatus: ${result.statusCode}` : ""}\n${wrapUntrustedContent(result.url, `Title: ${title}`)}`;
 						return {
 							content: [{ type: "text", text }],
 							details: {
 								action,
 								url: result.url,
-								title: result.title,
+								title,
 								// A same-document navigation has no response; omit the key rather than storing undefined.
 								...(result.statusCode !== undefined ? { statusCode: result.statusCode } : {}),
 								bytes: Buffer.byteLength(text),
@@ -541,14 +533,14 @@ export default function (pi: ExtensionAPI) {
 						const dimsNote = `${dims}${shot.fullPage ? " (full page)" : ""}`;
 
 						if (params.toFile) {
-							const tempFile = await saveScreenshotToTempFile(shot);
+							const tempFile = await writeTempFile("screenshot.png", Buffer.from(shot.data, "base64"));
 							const text = `Screenshot saved to: ${tempFile}\nDimensions: ${dimsNote}`;
 							return {
 								content: [{ type: "text", text }],
 								details: {
 									action,
 									url: info.url,
-									title: info.title,
+									title: sanitizeTitle(info.title),
 									screenshotDims: dims,
 									fullOutputPath: tempFile,
 								} satisfies WebBrowserDetails,
@@ -570,7 +562,7 @@ export default function (pi: ExtensionAPI) {
 							details: {
 								action,
 								url: info.url,
-								title: info.title,
+								title: sanitizeTitle(info.title),
 								screenshotDims: dims,
 							} satisfies WebBrowserDetails,
 						};
@@ -603,7 +595,7 @@ export default function (pi: ExtensionAPI) {
 						const msg = await mgr.fill(params.selector, params.text, {
 							timeout,
 							signal,
-							mode: params.mode as "fill" | "press" | undefined,
+							mode: params.mode,
 							frame: params.frame,
 						});
 						return {
@@ -734,7 +726,7 @@ export default function (pi: ExtensionAPI) {
 						}
 						const msg = await mgr.waitFor({
 							selector: params.selector,
-							state: params.state as "visible" | "hidden" | "attached" | "detached" | undefined,
+							state: params.state,
 							networkidle: params.networkidle,
 							timeout,
 							signal,
@@ -829,7 +821,7 @@ export default function (pi: ExtensionAPI) {
 								};
 							}
 						}
-						await mgr.setCookies(params.cookies as SetCookieParam[], { signal });
+						await mgr.setCookies(params.cookies, { signal });
 						const text = `Set ${params.cookies.length} cookie(s).`;
 						return {
 							content: [{ type: "text", text }],
@@ -936,7 +928,7 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					case "set_dialog_behavior": {
-						const dialogAction = (params.dialogAction as "accept" | "dismiss" | undefined) ?? "dismiss";
+						const dialogAction = params.dialogAction ?? "dismiss";
 						mgr.setDialogBehavior(dialogAction, params.promptText);
 						const text = `Dialogs will be ${dialogAction}ed${params.promptText ? ` (prompt text: "${params.promptText}")` : ""}.`;
 						return {
@@ -962,8 +954,9 @@ export default function (pi: ExtensionAPI) {
 					case "list_tabs": {
 						const tabs = await mgr.listTabs();
 						const text = formatTabs(tabs);
+						const info = await mgr.getPageInfoAsync();
 						return {
-							content: [{ type: "text", text }],
+							content: [{ type: "text", text: wrapUntrustedContent(info.url, text) }],
 							details: {
 								action,
 								tabCount: tabs.length,
@@ -1044,7 +1037,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (details.error) {
-				return new Text(theme.fg("error", clipField(details.error)), 0, 0);
+				return new Text(theme.fg("error", clipField(details.error.replace(/[\u0000-\u001f\u007f]/g, " "))), 0, 0);
 			}
 
 			const imageBlock = result.content.find((c) => c.type === "image");
@@ -1069,7 +1062,7 @@ export default function (pi: ExtensionAPI) {
 						"success",
 						`Navigated — ${
 							details.title
-								? clipField(details.title.replace(/[\u0000-\u001f\u007f]/g, " "))
+								? sanitizeTitle(details.title)
 								: clipField(details.url ?? "ok")
 						}`,
 					);

@@ -70,9 +70,10 @@ export class BoundedPreview implements Component {
 		const { theme } = options;
 		this.header = options.header;
 		this.cut = options.body.length > MAX_PREVIEW_CHARS;
-		// Slice the raw text before styling so the cap never cuts an escape sequence. Every logical
+		// Slice the text before styling so the cap never cuts an escape sequence. Every logical
 		// line takes at least one row, so one line past the cap is enough for the skip to register.
 		this.body = options.body
+			.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
 			.slice(0, MAX_PREVIEW_CHARS)
 			.split("\n", MAX_VISUAL_PREVIEW_LINES + 1)
 			.map((line) => theme.fg("dim", line))

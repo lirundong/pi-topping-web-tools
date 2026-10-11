@@ -63,7 +63,7 @@ All three tools are `direct`-exposure and pi activates those on registration (`d
 
 ### Codemode tool listing
 
-With `codemode.mode: "only"`, the `codemode` description lists every tool a script can call instead of the model calling those tools directly. Those declarations carry each tool's prompt guidelines and share `codemode.inlineBudget`, which defaults to 3000 estimated tokens (characters / 4); tools that do not fit are left out and are reached with `searchTools()` or `describeTool()`. On pi 1.0.4+, where guidelines are part of the listing, the seven-tool catalog `fetch_markdown`, `pdf_extract`, `web_browser`, plus built-in `read`, `bash`, `edit`, and `write` needs about 3716 tokens — `web_browser` alone is about 1568, the largest section — so the default budget drops `web_browser` from that list. Set the budget to at least 3716 if you use `only` with these tools; real sessions that load more extensions need more.
+With `codemode.mode: "only"`, pi hides the direct declarations of active tools, so the model calls them from `codemode` scripts, and the `codemode` description lists each callable tool instead, with its prompt guidelines on pi 1.0.4+. Listed tools share `codemode.inlineBudget`, which defaults to 3000 estimated tokens (characters / 4); tools that do not fit are left out and are reached with `searchTools()` or `describeTool()`. On pi 1.0.4+, the seven-tool catalog `fetch_markdown`, `pdf_extract`, `web_browser`, plus built-in `read`, `bash`, `edit`, and `write` needs about 3,700 tokens as of pi 1.1.0 — `web_browser` alone is about 1,600, the largest section — so the default budget drops `web_browser` from that list. Set the budget to 4096 or more if you use `only` with these tools; real sessions that load more extensions need more.
 
 ```json
 {
@@ -153,7 +153,7 @@ When `screenshot` returns an inline result (`toFile` omitted or `false`), `web_b
 
 `toFile=true` and `/browser-screenshot` save the original PNG to disk and put only the path and dimensions in the tool result. The file is resized only if a later `read` or `@file` attachment sends it to the model.
 
-In codemode, a tool result exposes only its text blocks, so an inline `screenshot` reaches the script as its caption with no image bytes. To let a script inspect a screenshot, take it with `toFile=true` and read the saved path: on pi 1.0.4+, `tools.read({ path })` resolves an image file to an image block, and `image()` adds that block to the script output. On pi before 1.0.4, `read` resolves an image file to its text, so the pixels are not reachable from a script — call `screenshot` directly from the session on those hosts.
+In codemode, a tool without an output schema, such as `web_browser`, resolves to its text blocks only, so an inline `screenshot` reaches the script as its caption with no image bytes. To let a script inspect a screenshot, take it with `toFile=true` and read the saved path: on pi 1.0.4+, `tools.read({ path })` resolves an image file to an image block, and `image()` adds that block to the script output. On pi before 1.0.4, `read` resolves an image file to only its `Read image file [...]` caption, so the pixels are not reachable from a script; on those hosts, call `screenshot` as a direct tool call instead of from a script.
 
 The resize fields are:
 
@@ -197,7 +197,7 @@ This matches pi's documented example. It leaves a default 1280×720 viewport scr
 - Every HTTP(S) document, script, image, XHR/fetch, beacon, and other routed request is checked against the live preapproved, session, and durable permissions before the request is sent. Path-scoped preapprovals remain path-scoped; session and durable grants remain exact-origin grants except that bare and `www.` host variants are treated as equivalent.
 - Redirect responses are inspected before Chromium receives them. Approved top-level redirects, including simple bare-domain ↔ `www.` redirects, are followed one gated hop at a time. During `navigate`, a redirect to an unapproved URL returns `Blocked: redirect to <origin> requires approval`; redirects triggered by later page interactions are blocked and reported in network logs. Redirected subresources are blocked rather than followed and also appear in network logs.
 - WebSocket handshakes use the same live permission check. Service workers are disabled so they cannot bypass request routing.
-- Client-side navigation and popup destinations are gated. A blocked popup is closed without becoming active, and a blocked same-tab navigation returns to the prior approved page.
+- Client-side navigation and popup destinations are gated. A blocked popup is closed without becoming active, and a blocked same-tab navigation returns to the prior approved page. Approved popups become active only after their main-frame navigation commits.
 - `data:` and `blob:` subresources are allowed because they do not create network egress, while top-level `data:`/`blob:` documents are denied. `file:` documents require approval for the target path; local-file subresources are allowed only from an approved local-file page.
 - Decision errors fail closed. Route handlers never prompt; call `navigate` on a blocked target to use the normal approval prompt. Blocks are reported by `get_network_logs` as `blocked by egress policy`.
 
@@ -256,13 +256,13 @@ Commands:
 
 ## Security model (shared)
 
-- **Preapproved hosts**: common documentation and dev sites are allowed without prompting. The allowlist lives in `src/permissions.ts` and is shared by both tools.
+- **Preapproved hosts**: common documentation and dev sites are allowed without prompting. The allowlist lives in `src/permissions.ts` and is shared by all three tools.
 - **User confirmation**: other hosts prompt Allow once / Allow for this session / Allow for 1 day / Allow for 1 week / Allow for 30 days / Deny. For `web_browser` navigation, Allow once becomes a browser-session grant because request-level enforcement must authorize the loaded document's later requests.
 - **Tool annotations**: on pi 0.99+, `fetch_markdown` and `pdf_extract` declare `readOnlyHint` and `openWorldHint`, and `web_browser` declares `openWorldHint` with `readOnlyHint: false`, for permission extensions that confirm calls by hint. The host confirmation above applies regardless of how another extension treats the hints.
 - **URL validation**: all tools reject embedded credentials and overlong URLs. `fetch_markdown` and `pdf_extract` additionally reject loopback, private, and link-local hosts and any non-HTTP(S) scheme on a `url`. `web_browser` accepts `localhost`, private IPs, and `file://` paths so it can drive local dev servers and local HTML — each still prompts for confirmation unless session-approved or covered by a saved durable grant.
 - **Local file resolution**: `pdf_extract` resolves a `path` through `realpath` before any check, so a symlink pointing outside the working directory is treated as outside and prompts. Directories, FIFOs, and devices are rejected, and the size limit is enforced from `stat` before any bytes are read. `web_browser` `upload_file` follows the same rule: files outside the working directory prompt for confirmation (session-scoped) before they are read.
 - **Isolated browser context and routed egress**: each session uses a fresh Chromium context (no shared profile/cookies with your system browser). HTTP(S) requests, redirect targets, client navigations, popups, and WebSocket connections are checked against live `web_browser` permissions; service workers are disabled.
-- **Untrusted content boundary**: `fetch_markdown` results are wrapped in `<untrusted-content url="…">` tags, and `pdf_extract` results in `<untrusted-content source="…">`, so the model treats fetched page and document text as data, not instructions.
+- **Untrusted content boundary**: `fetch_markdown` results and `web_browser` page-derived results are wrapped in `<untrusted-content url="…">` tags, and `pdf_extract` results in `<untrusted-content source="…">`, so the model treats fetched page and document text as data, not instructions.
 - **PDF resource limits**: extraction is bounded by download size, page count, and a timeout. Because the bundled PDF.js runs on the event loop rather than a worker, the timeout bounds extraction across its await points but cannot interrupt a fully synchronous parse — the size and page caps are the primary defence.
 
 ## Limitations
@@ -273,10 +273,6 @@ Commands:
 - Request routing buffers HTTP(S) responses and blocks redirected subresources, so streaming endpoints and resources that rely on redirects may not behave like an unrestricted browser.
 - Playwright routing covers HTTP(S) and WebSockets, not browser transports such as WebRTC; OS-level egress sandboxing remains outside this extension's scope.
 - `pdf_extract` reads only an existing text layer; scanned documents need OCR, which is out of scope.
-
-### Popups and navigation
-
-Same-tab client navigation and popups are checked against the live `web_browser` permissions. Unapproved document requests are aborted before reaching the target; blocked popups are closed without becoming active, while a blocked same-tab navigation returns to the prior approved page. Approved popups become active only after their main-frame navigation commits.
 
 ## Development
 

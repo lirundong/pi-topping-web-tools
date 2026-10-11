@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { rm, stat } from "node:fs/promises";
+import { dirname } from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import webBrowserExtension from "../src/web-browser/index.ts";
@@ -13,7 +15,7 @@ type WebBrowserTool = {
 		ctx: ExtensionContext,
 	) => Promise<{
 		content: Array<{ type: string; text: string }>;
-		details?: { action?: string; error?: string };
+		details?: { action?: string; error?: string; fullOutputPath?: string };
 		isError?: boolean;
 	}>;
 };
@@ -112,5 +114,69 @@ test("set_cookies for a preapproved domain passes", async () => {
 		assert.match(result.content[0]?.text ?? "", /Set 1 cookie\(s\)\./);
 	} finally {
 		await closeBrowserManager();
+	}
+});
+
+test("toFile screenshots are written with mode 0600", async () => {
+	const manager = getBrowserManager();
+	manager.screenshot = async () => ({ data: "iVBORw0KGgo=", width: 1, height: 1, fullPage: false });
+	manager.getPageInfoAsync = async () => ({
+		url: "about:blank",
+		title: "",
+		isOpen: true,
+		consoleCount: 0,
+		networkCount: 0,
+		dialogCount: 0,
+		tabCount: 1,
+	});
+	const ctx = {
+		hasUI: true,
+		ui: {
+			setStatus: () => {},
+			theme: { fg: (_tone: string, text: string) => text },
+		},
+	} as unknown as ExtensionContext;
+	let tempFile: string | undefined;
+
+	try {
+		const result = await tool.execute("1", { action: "screenshot", toFile: true }, undefined, () => {}, ctx);
+		tempFile = result.details?.fullOutputPath;
+		assert.ok(tempFile);
+		assert.equal((await stat(tempFile)).mode & 0o777, 0o600);
+	} finally {
+		await closeBrowserManager();
+		if (tempFile) await rm(dirname(tempFile), { recursive: true, force: true });
+	}
+});
+
+test("truncated text output is written with mode 0600", async () => {
+	const manager = getBrowserManager();
+	manager.getText = async () => "x".repeat(100_000);
+	manager.getPageInfoAsync = async () => ({
+		url: "about:blank",
+		title: "",
+		isOpen: true,
+		consoleCount: 0,
+		networkCount: 0,
+		dialogCount: 0,
+		tabCount: 1,
+	});
+	const ctx = {
+		hasUI: true,
+		ui: {
+			setStatus: () => {},
+			theme: { fg: (_tone: string, text: string) => text },
+		},
+	} as unknown as ExtensionContext;
+	let tempFile: string | undefined;
+
+	try {
+		const result = await tool.execute("1", { action: "get_text" }, undefined, () => {}, ctx);
+		tempFile = result.details?.fullOutputPath;
+		assert.ok(tempFile);
+		assert.equal((await stat(tempFile)).mode & 0o777, 0o600);
+	} finally {
+		await closeBrowserManager();
+		if (tempFile) await rm(dirname(tempFile), { recursive: true, force: true });
 	}
 });

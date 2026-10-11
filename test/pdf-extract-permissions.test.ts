@@ -10,7 +10,8 @@ import type {
 	ExtensionContext,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
-import pdfExtractExtension, { isInsideCwd, resolveLocalPdf } from "../src/pdf-extract.ts";
+import pdfExtractExtension, { resolveLocalPdf } from "../src/pdf-extract.ts";
+import { isInsideCwd } from "../src/permissions.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(__dirname, "fixtures", "sample.pdf");

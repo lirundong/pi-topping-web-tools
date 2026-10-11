@@ -2,12 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Documented that the default `codemode.inlineBudget` (3000 estimated tokens) leaves `web_browser` out of the `codemode.mode: "only"` tool listing when it is loaded with `fetch_markdown`, `pdf_extract`, and the built-in `read`, `bash`, `edit`, and `write`, and the budget that fits them.
+- Documented how a codemode script inspects a saved screenshot with `tools.read` and `image()` on pi 1.0.4+, and the fallback on older hosts.
+
 ### Changed
 
-- Tested against pi 1.1.0. No break: typecheck, 226 tests, 30/30 smoke checks with `PI_SUPPRESS_NOTIFICATIONS` unset, and the RPC load check pass.
+- Tested against pi 1.1.0. No break: the 1.0.4 and 1.1.0 extension-facing changes are additive (`ToolLoadout.getPromptGuidelines()`, and `durationMs` and `outputPad` on the tool render context), and codemode now lists each tool's prompt guidelines with its declaration, which is why `web_browser` no longer fits the default `codemode.inlineBudget` in `only` mode.
 - Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.3 to 1.1.0.
-- `web_browser`: the codemode screenshot guideline now points at `tools.read({ path })` plus `image()`, which works on pi 1.0.4+ where the built-in `read` returns an image block for image files. The older rule still holds for `web_browser` itself, which declares no output schema, so a script still receives only the screenshot's caption. Guideline count stays 16.
-- README: documented the codemode `inlineBudget` default of 3000 estimated tokens, which omits `web_browser` from the `only`-mode tool listing when these seven tools are loaded (about 3716 tokens are needed), and the `tools.read` + `image()` path for inspecting a saved screenshot from a codemode script, including the pre-1.0.4 host note.
+- `web_browser`: the codemode screenshot guideline now tells a script to save the screenshot with `toFile=true`, read the file with `tools.read({ path })`, and pass the resulting image block to `image()`. This needs pi 1.0.4+, where `read` returns an image block for image files. A script that calls `web_browser` still receives only text, because the tool declares no output schema.
 
 ## [0.2.7] - 2026-10-05
 

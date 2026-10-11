@@ -3,13 +3,13 @@
 import { defineTool, formatSize, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { LRUCache } from "lru-cache";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { extractText, getDocumentProxy } from "unpdf";
 import { combineSignals } from "./abort-utils.ts";
-import { isPreapprovedHost, permissionKey } from "./permissions.ts";
+import { isInsideCwd, isPreapprovedHost, permissionKey } from "./permissions.ts";
 import { requestHostPermission } from "./permission-prompt.ts";
 import { BoundedPreview, clipField, resultText } from "./render-preview.ts";
 import { getWithPermittedRedirects, isPermittedRedirect, sliceContent, validateURL } from "./fetch-markdown.ts";
@@ -108,11 +108,6 @@ export function parsePageRange(spec: string, totalPages: number): number[] {
 		throw new Error(`No pages selected by "${spec}". The document has ${totalPages} page(s).`);
 	}
 	return [...selected].sort((a, b) => a - b);
-}
-
-export function isInsideCwd(resolvedPath: string): boolean {
-	const rel = relative(process.cwd(), resolvedPath);
-	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 type LocalPdfTarget = {

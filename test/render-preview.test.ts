@@ -116,6 +116,11 @@ test("BoundedPreview drops rows past the cap and keeps the leading ones", () => 
 	assert.equal(rows.at(-1), MARKER);
 });
 
+test("BoundedPreview strips terminal control characters from its body", () => {
+	const rows = preview("\x1b]52;c;QQ==\x07", 80);
+	assert.ok(!rows.join("\n").includes("\x1b]52"));
+});
+
 test("BoundedPreview leaves short text intact", () => {
 	assert.deepEqual(preview("one\ntwo", 80), ["Header", "one", "two"]);
 });
