@@ -513,7 +513,7 @@ To complete your request, I need to fetch content from the redirected URL. Pleas
 
 		const offset = Math.max(0, Math.floor(params.offset ?? 0));
 		const slice = sliceContent(response.content, offset);
-		const sanitizedText = slice.text.replaceAll("</untrusted-content", "");
+		const sanitizedText = slice.text.replaceAll(/<\/(untrusted-content)/gi, "<\\/$1");
 		const safeUrl = params.url.replaceAll('"', "%22");
 		const wrappedText = `<untrusted-content url="${safeUrl}">\n${sanitizedText}\n</untrusted-content>`;
 

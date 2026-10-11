@@ -137,7 +137,7 @@ function formatTabs(tabs: TabInfo[]): string {
 
 function wrapUntrustedContent(url: string, text: string): string {
 	const safeUrl = url.replaceAll('"', "%22");
-	const safeText = text.replaceAll(/<\/untrusted-content/gi, "");
+	const safeText = text.replaceAll(/<\/(untrusted-content)/gi, "<\\/$1");
 	return `<untrusted-content url="${safeUrl}">\n${safeText}\n</untrusted-content>`;
 }
 

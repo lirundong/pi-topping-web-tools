@@ -866,7 +866,7 @@ export class BrowserManager {
 		const snippet = await this.pageSnippet(page);
 		const frameNote = frame ? ` within frame "${frame}"` : "";
 		const safeUrl = page.url().replaceAll('"', "%22");
-		return `No element matches selector "${selector}"${frameNote}. ${diagnostics}\nPage snippet:\n<untrusted-content url="${safeUrl}">\n${snippet.replaceAll("</untrusted-content", "")}\n</untrusted-content>`;
+		return `No element matches selector "${selector}"${frameNote}. ${diagnostics}\nPage snippet:\n<untrusted-content url="${safeUrl}">\n${snippet.replaceAll(/<\/(untrusted-content)/gi, "<\\/$1")}\n</untrusted-content>`;
 	}
 
 	private async ensureLaunched(): Promise<void> {

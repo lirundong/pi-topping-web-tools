@@ -369,7 +369,7 @@ Usage notes:
 
 		const offset = Math.max(0, Math.floor(params.offset ?? 0));
 		const slice = sliceContent(body, offset);
-		const sanitizedText = slice.text.replaceAll(/<\/untrusted-content/gi, "");
+		const sanitizedText = slice.text.replaceAll(/<\/(untrusted-content)/gi, "<\\/$1");
 		const safeSource = source.replaceAll('"', "%22");
 
 		return {
