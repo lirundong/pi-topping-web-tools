@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.2.7] - 2026-10-05
+## [0.2.8] - 2026-10-12
 
 ### Added
 
@@ -11,9 +11,6 @@
 
 ### Changed
 
-- Tested against pi 1.0.3. No break: the extension-facing declaration surface is unchanged apart from additive `registerToolRenderer`/`ToolRenderers`, pi-ai adds `samplingParamsByThinkingLevel` and renames the Azure provider (unused here), and pi-tui's Home/End default change does not reach these tools.
-- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.0 to 1.0.3.
-- `web_browser`: the truncated-output file and `toFile` screenshots are written with mode `0600`, matching pi 1.0.3's user-only output files. Both were already unreadable by other users because each sits in a `0700` `mkdtemp` directory.
 - Tested against pi 1.1.0. No break: the 1.0.4 and 1.1.0 extension-facing changes are additive (`ToolLoadout.getPromptGuidelines()`, and `durationMs` and `outputPad` on the tool render context), and codemode now lists each tool's prompt guidelines with its declaration, which is why `web_browser` no longer fits the default `codemode.inlineBudget` in `only` mode.
 - Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.3 to 1.1.0.
 - `web_browser`: the codemode screenshot guideline now tells a script to save the screenshot with `toFile=true`, read the file with `tools.read({ path })`, and pass the resulting image block to `image()`. This needs pi 1.0.4+, where `read` returns an image block for image files. A script that calls `web_browser` still receives only text, because the tool declares no output schema.
@@ -23,6 +20,14 @@
 - `fetch_markdown`, `pdf_extract`, `web_browser`: a forged `</untrusted-content>` closing tag in fetched or page text is now escaped to `<\/untrusted-content` instead of deleted. Deletion could reassemble a real closer from split text such as `</untrusted-</untrusted-contentcontent>`, so hostile text could end the fence early and be read as trusted text. The match is case-insensitive, and the fence-escape tests now assert exactly one closing tag.
 - `fetch_markdown`, `pdf_extract`, `web_browser`: an expanded result preview drops terminal control characters from its body before styling, so a page cannot emit an OSC 52 clipboard write or another escape sequence while a result is drawn. `web_browser` also replaces control characters with spaces in a page title and in a tool error message.
 - `web_browser`: the `navigate` result now puts the status line before an `<untrusted-content>` fence that holds only the page title, and the `list_tabs` result is fenced the same way, because a tab title comes from the page. Both results held page-controlled text outside a fence before.
+
+## [0.2.7] - 2026-10-05
+
+### Changed
+
+- Tested against pi 1.0.3. No break: the extension-facing declaration surface is unchanged apart from additive `registerToolRenderer`/`ToolRenderers`, pi-ai adds `samplingParamsByThinkingLevel` and renames the Azure provider (unused here), and pi-tui's Home/End default change does not reach these tools.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.0.0 to 1.0.3.
+- `web_browser`: the truncated-output file and `toFile` screenshots are written with mode `0600`, matching pi 1.0.3's user-only output files. Both were already unreadable by other users because each sits in a `0700` `mkdtemp` directory.
 
 ## [0.2.6] - 2026-10-02
 
