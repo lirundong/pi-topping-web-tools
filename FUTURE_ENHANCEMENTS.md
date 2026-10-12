@@ -2,6 +2,13 @@
 
 Candidate additions and updates, roughly ordered by impact-per-effort.
 
+## Tool exposure
+
+Shipped: one global `toolExposure` in `settings.json` (`direct` / `codemode` / `deferred`) plus a shared namespace. Not shipped:
+
+- TUI settings for the mode
+- Per-tool exposure (for example defer only `web_browser`)
+
 ## `web_browser` additions
 
 Lower priority:

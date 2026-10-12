@@ -54,16 +54,68 @@ Start with `fetch_markdown` for efficient static content; use `web_browser` when
 | `pdf_extract` | Extract the text layer from a remote or local PDF, with page markers |
 | `web_browser` | Headless Chromium automation — navigate, click, type, screenshot, evaluate, logs, cookies |
 
-All three tools are `direct`-exposure and pi activates those on registration (`defaultActive` defaults to true), so nothing needs to be enabled.
+By default all three tools use `direct` exposure. Pi activates those on registration (`defaultActive` defaults to true), so a default install needs no extra `defaultTools` entry.
+
+### Tool exposure (optional)
+
+A single setting controls how the model reaches all three tools. It does not change host allowlists, permission prompts, or `--exclude-tools` / `defaultTools` filtering. Set it in `~/.pi/agent/pi-topping-web-tools/settings.json` (no TUI control):
+
+```json
+{
+  "toolExposure": "direct"
+}
+```
+
+| `toolExposure` | Tool `exposure` | Loader the extension activates |
+|----------------|-----------------|--------------------------------|
+| `direct` (default) | `direct`, active on register | None |
+| `codemode` | `codemode` | `codemode` |
+| `deferred` | `deferred` | `tool_search`, or `codemode` when `tool_search` is not available |
+
+All three tools share the `pi-topping-web-tools` namespace so `searchTools()` and `describeNamespace("pi-topping-web-tools")` can find them when they are not listed inline.
+
+Needs pi ≥0.99.0 for `codemode` / `tool_search` / `exposure`. Screenshot inspection from a script needs pi ≥1.0.4 (`toFile=true`, then `tools.read` and `image()`).
+
+At every session start (startup, reload, new, resume, and fork), the extension activates the loader with `pi.setActiveTools()`, as Pi's MCP support does for MCP servers. You do not need `+codemode` or `+tool_search` in `defaultTools`. The loader is a session-wide Pi tool, so the model can also use it for the other tools in the session, not only for these three. `--tools` and `--exclude-tools` unregister a loader they leave out. The extension does not activate that loader. It notifies once at session start instead, because the model cannot reach the tools.
+
+`codemode.mode: "only"` is a session-wide Pi setting. While it is on, the model must call bash/read/edit/write through `codemode` as well, not only these web tools. `--tools` still applies, for example `pi --tools +codemode,-web_browser`.
 
 ### Enabling and disabling tools
 
 - To hide a tool for a session, name it in `--exclude-tools` (or start with `--no-tools` and re-add what you want with `--tools`).
 - To change the startup set in your `settings.json`, use `defaultTools`. Bare names **replace** pi's defaults, so write `"+fetch_markdown"` to add a tool without dropping `read`, `bash`, `edit`, and `write`. On pi 0.99.2+, `/reload` activates tools **newly added** to `defaultTools` without a restart. The reverse does not follow: a tool **removed** from `defaultTools` stays active until you restart, and a tool you turned off during the session stays off. `--tools`, `--no-tools`, and `--no-builtin-tools` still override the setting, on reload as well.
 
+### Settings profiles for smaller prompts
+
+These snippets go in `~/.pi/agent/settings.json`. They are optional. Default installs can omit them.
+
+**Default (unchanged).** Direct tools. No codemode. Full tool schemas stay in the prompt.
+
+**Codemode-minimal.** Hide direct declarations and keep the `codemode` description small. `inlineBudget: 0` lists namespaces only. Scripts find tools with `searchTools()` / `describeTool()` / `describeNamespace()`. `inlineBudget: 4096` (or more) instead copies the full seven-tool catalog into the `codemode` description. That **moves** the schemas; it does not shrink them. Use `0` (or a small budget such as `512` for `fetch_markdown` / `pdf_extract` only) when the goal is fewer prompt tokens.
+
+```json
+{
+  "defaultTools": ["+codemode"],
+  "codemode.mode": "only",
+  "codemode.inlineBudget": 0
+}
+```
+
+With `toolExposure` still `direct`, `mode: "only"` hides the active declarations while they stay callable from scripts. Set `"toolExposure": "codemode"` in the extension settings file if you also want these three tools off the active set unless a loader activates them.
+
+**Deferred + tool_search.** Register the tools as `deferred` and let `tool_search` load a schema on the next turn. The extension activates `tool_search`, so `~/.pi/agent/settings.json` needs no change.
+
+`~/.pi/agent/pi-topping-web-tools/settings.json`:
+
+```json
+{
+  "toolExposure": "deferred"
+}
+```
+
 ### Codemode tool listing
 
-With `codemode.mode: "only"`, pi hides the direct declarations of active tools, so the model calls them from `codemode` scripts, and the `codemode` description lists each callable tool instead, with its prompt guidelines on pi 1.0.4+. Listed tools share `codemode.inlineBudget`, which defaults to 3000 estimated tokens (characters / 4); tools that do not fit are left out and are reached with `searchTools()` or `describeTool()`. On pi 1.0.4+, the seven-tool catalog `fetch_markdown`, `pdf_extract`, `web_browser`, plus built-in `read`, `bash`, `edit`, and `write` needs about 3,700 tokens as of pi 1.1.0 — `web_browser` alone is about 1,600, the largest section — so the default budget drops `web_browser` from that list. Set the budget to 4096 or more if you use `only` with these tools; real sessions that load more extensions need more.
+With `codemode.mode: "only"`, pi hides the direct declarations of active tools, so the model calls them from `codemode` scripts, and the `codemode` description lists each callable tool instead, with its prompt guidelines on pi 1.0.4+. Listed tools share `codemode.inlineBudget`, which defaults to 3000 estimated tokens (characters / 4); tools that do not fit are left out and are reached with `searchTools()` or `describeTool()`. `0` lists only namespaces. On pi 1.0.4+, the seven-tool catalog `fetch_markdown`, `pdf_extract`, `web_browser`, plus built-in `read`, `bash`, `edit`, and `write` needs about 3,700 tokens as of pi 1.1.0 — `web_browser` alone is about 1,600, the largest section — so the default budget drops `web_browser` from that list. Set the budget to 4096 or more if you use `only` and want every tool inline; real sessions that load more extensions need more. Use `0` when you want the smallest `codemode` description.
 
 ```json
 {

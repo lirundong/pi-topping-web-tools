@@ -34,6 +34,7 @@ import { listGrants } from "../permission-store.ts";
 import { isInsideCwd, permissionKey } from "../permissions.ts";
 import { suppressNotifications } from "../env.ts";
 import { publishBrowserState, registerBrowserFeeds } from "./feeds.ts";
+import { attachExposureLoader, webToolPresentation } from "../tool-exposure.ts";
 
 const ACTIONS = [
 	"navigate",
@@ -228,6 +229,7 @@ export default function (pi: ExtensionAPI) {
 		return manager;
 	};
 	registerBrowserFeeds(pi);
+	attachExposureLoader(pi);
 
 	pi.on("session_start", async (_event, ctx) => {
 		const info = await getConfiguredBrowserManager().getPageInfoAsync();
@@ -322,9 +324,12 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	const presentation = webToolPresentation();
 	pi.registerTool({
 		name: "web_browser",
 		label: "Web Browser",
+		exposure: presentation.exposure,
+		namespace: presentation.namespace,
 		promptSnippet:
 			"Automate a headless browser to navigate sites, click/type, capture screenshots, evaluate JS, and read console logs.",
 		promptGuidelines: [

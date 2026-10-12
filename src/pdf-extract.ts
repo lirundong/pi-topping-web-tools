@@ -12,6 +12,7 @@ import { combineSignals } from "./abort-utils.ts";
 import { isInsideCwd, isPreapprovedHost, permissionKey } from "./permissions.ts";
 import { requestHostPermission } from "./permission-prompt.ts";
 import { BoundedPreview, clipField, resultText } from "./render-preview.ts";
+import { attachExposureLoader, registerWebTool } from "./tool-exposure.ts";
 import { getWithPermittedRedirects, isPermittedRedirect, sliceContent, validateURL } from "./fetch-markdown.ts";
 import { upgradeHttpToHttps } from "./web-browser/permissions.ts";
 
@@ -428,7 +429,8 @@ Usage notes:
 export default function (pi: ExtensionAPI) {
 	const sessionPermissions = new Map<string, "allow" | "deny">();
 
-	pi.registerTool(pdfExtractTool);
+	registerWebTool(pi, pdfExtractTool);
+	attachExposureLoader(pi);
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "pdf_extract") return undefined;

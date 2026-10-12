@@ -13,6 +13,7 @@ import { getBrowserHeaders } from "./browser-headers.ts";
 import { isPreapprovedHost, permissionKey } from "./permissions.ts";
 import { requestHostPermission } from "./permission-prompt.ts";
 import { BoundedPreview, clipField, resultText } from "./render-preview.ts";
+import { attachExposureLoader, registerWebTool } from "./tool-exposure.ts";
 import { MAX_URL_LENGTH, isLocalOrPrivateHost, upgradeHttpToHttps } from "./web-browser/permissions.ts";
 
 const MAX_HTTP_CONTENT_LENGTH = 25 * 1024 * 1024;
@@ -582,7 +583,8 @@ To complete your request, I need to fetch content from the redirected URL. Pleas
 export default function (pi: ExtensionAPI) {
 	const sessionPermissions = new Map<string, "allow" | "deny">();
 
-	pi.registerTool(fetchMarkdownTool);
+	registerWebTool(pi, fetchMarkdownTool);
+	attachExposureLoader(pi);
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "fetch_markdown") return undefined;
