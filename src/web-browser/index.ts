@@ -394,7 +394,7 @@ export default function (pi: ExtensionAPI) {
 				Type.Number({ description: "Tab index to switch to, from list_tabs (action: switch_tab)" }),
 			),
 			dialogAction: Type.Optional(
-				StringEnum(["accept", "dismiss"], {
+				StringEnum(["accept", "dismiss"] as const, {
 					description:
 						"How to resolve future JS dialogs (alert/confirm/prompt) for the rest of the session (action: set_dialog_behavior, default dismiss)",
 				}),
@@ -423,13 +423,13 @@ export default function (pi: ExtensionAPI) {
 				Type.Number({ description: "Viewport height in pixels (action: set_viewport)" }),
 			),
 			mode: Type.Optional(
-				StringEnum(["fill", "press"], {
+				StringEnum(["fill", "press"] as const, {
 					description:
 						"Typing mode (action: type, default fill). fill clears the field first; press types key-by-key and appends to existing input.",
 				}),
 			),
 			state: Type.Optional(
-				StringEnum(["visible", "hidden", "attached", "detached"], {
+				StringEnum(["visible", "hidden", "attached", "detached"] as const, {
 					description: "Wait state (action: wait_for, default visible)",
 				}),
 			),
@@ -458,7 +458,7 @@ export default function (pi: ExtensionAPI) {
 						path: Type.Optional(Type.String()),
 						httpOnly: Type.Optional(Type.Boolean()),
 						secure: Type.Optional(Type.Boolean()),
-						sameSite: Type.Optional(StringEnum(["Strict", "Lax", "None"])),
+						sameSite: Type.Optional(StringEnum(["Strict", "Lax", "None"] as const)),
 					}),
 					{ description: "Cookies to set (action: set_cookies); each needs url or domain+path" },
 				),

@@ -7,6 +7,15 @@
 - Optional `toolExposure` setting (`direct` default, or `codemode` / `deferred`) in `~/.pi/agent/pi-topping-web-tools/settings.json`. All three tools share the `pi-topping-web-tools` namespace. At each session start, a non-`direct` mode activates the loader it needs with `pi.setActiveTools()`: `codemode` for `codemode`, and `tool_search` (or `codemode` when `tool_search` is not registered) for `deferred`. `defaultTools` needs no `+codemode` / `+tool_search` entry. When `--tools` or `--exclude-tools` leaves the loader out, the extension notifies once instead.
 - README settings profiles for default direct tools, codemode-minimal (`inlineBudget: 0`), and deferred + `tool_search`. Clarified that a large `inlineBudget` moves declarations into the `codemode` description instead of shrinking them.
 
+### Changed
+
+- Tested against pi 1.2.0. No break: the 1.2.0 breaking changes (`before_agent_start` for `triggerTurn` runs, busy session during run start, theme schema validation, `pi mcp list --json` shape) touch APIs and resources this package does not use.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.1.0 to 1.2.0.
+
+### Fixed
+
+- `web_browser`: the `mode`, `state`, `cookies[].sameSite`, and `dialogAction` parameter schemas now pass `as const` arrays to `StringEnum`, so their inferred types are the literal unions instead of `string`. This fixes four `tsc` errors; runtime validation is unchanged.
+
 ## [0.2.8] - 2026-10-12
 
 ### Added
