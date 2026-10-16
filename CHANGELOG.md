@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-16
+
 ### Added
 
 - Optional `toolExposure` setting (`direct` default, or `codemode` / `deferred`) in `~/.pi/agent/pi-topping-web-tools/settings.json`. All three tools share the `pi-topping-web-tools` namespace. At each session start, a non-`direct` mode activates the loader it needs with `pi.setActiveTools()`: `codemode` for `codemode`, and `tool_search` (or `codemode` when `tool_search` is not registered) for `deferred`. `defaultTools` needs no `+codemode` / `+tool_search` entry. When `--tools` or `--exclude-tools` leaves the loader out, the extension notifies once instead.
