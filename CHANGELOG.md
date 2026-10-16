@@ -11,6 +11,8 @@
 
 - Tested against pi 1.2.0. No break: the 1.2.0 breaking changes (`before_agent_start` for `triggerTurn` runs, busy session during run start, theme schema validation, `pi mcp list --json` shape) touch APIs and resources this package does not use.
 - Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.1.0 to 1.2.0.
+- Tested against pi 1.3.0. No break: the extension-facing declaration surface (`ExtensionAPI`, `ToolDefinition`, `ExtensionContext`, `ExtensionUIContext`) is unchanged, pi-ai only adds optional `ToolCall.argumentsError`, and pi-tui is unchanged. Provider, `/share`, and model-switching changes do not reach these tools.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.2.0 to 1.3.0.
 
 ### Fixed
 
