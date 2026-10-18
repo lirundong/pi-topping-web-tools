@@ -28,7 +28,7 @@
 	],
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "node --test test/*.test.ts"
+		"test": "node -C compiled --test test/*.test.ts"
 	},
 	"pi": {
 		"extensions": [
