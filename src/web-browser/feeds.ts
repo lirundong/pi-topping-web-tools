@@ -1,11 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export const BROWSER_FEED_TYPE = "pi-topping-web-tools/browser";
-
-export interface BrowserFeedPayload {
-	label: string;
-	open: 0 | 1;
-}
+import { ENTRY_TYPES, type BrowserFeedPayload } from "@underactive/pi-topping-primitives/contracts";
 
 let extension: ExtensionAPI | undefined;
 let latestPayload: BrowserFeedPayload | undefined;
@@ -19,7 +13,7 @@ function samePayload(left: BrowserFeedPayload | undefined, right: BrowserFeedPay
 function emitBrowserState(force = false): void {
 	if (!extension || !latestPayload || (!force && samePayload(emittedPayload, latestPayload))) return;
 	try {
-		extension.appendEntry(BROWSER_FEED_TYPE, latestPayload);
+		extension.appendEntry(ENTRY_TYPES.browser, latestPayload);
 		emittedPayload = latestPayload;
 	} catch {
 		// Feed publication is best effort; leave emitted state unchanged for retry.

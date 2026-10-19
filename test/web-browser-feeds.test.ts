@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ENTRY_TYPES } from "@underactive/pi-topping-primitives/contracts";
 import {
-	BROWSER_FEED_TYPE,
 	publishBrowserState,
 	registerBrowserFeeds,
 	resetBrowserFeedState,
@@ -31,8 +31,8 @@ test("browser feed emits typed open and closed states only when changed", () => 
 	publishBrowserState("", 0);
 
 	assert.deepEqual(entries, [
-		{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } },
-		{ type: BROWSER_FEED_TYPE, payload: { label: "", open: 0 } },
+		{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } },
+		{ type: ENTRY_TYPES.browser, payload: { label: "", open: 0 } },
 	]);
 });
 
@@ -46,7 +46,7 @@ test("browser feed retries a payload after append failure", () => {
 	const workingPi = createPi(entries);
 	registerBrowserFeeds(workingPi);
 	publishBrowserState("example.com", 1);
-	assert.deepEqual(entries, [{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } }]);
+	assert.deepEqual(entries, [{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } }]);
 });
 
 test("browser feed republishes the latest state after a session starts and first turn ends", () => {
@@ -62,8 +62,8 @@ test("browser feed republishes the latest state after a session starts and first
 	pi.emit("turn_end");
 
 	assert.deepEqual(entries, [
-		{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } },
-		{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } },
-		{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } },
+		{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } },
+		{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } },
+		{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } },
 	]);
 });

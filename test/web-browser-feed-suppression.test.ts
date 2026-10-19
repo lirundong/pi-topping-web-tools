@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import webBrowserExtension, { browserLabel } from "../src/web-browser/index.ts";
-import { BROWSER_FEED_TYPE, publishBrowserState, resetBrowserFeedState } from "../src/web-browser/feeds.ts";
+import { ENTRY_TYPES } from "@underactive/pi-topping-primitives/contracts";
+import { publishBrowserState, resetBrowserFeedState } from "../src/web-browser/feeds.ts";
 
 test("browser labels identify hosts, local files, and unavailable URLs", () => {
 	assert.equal(browserLabel("https://example.com/path"), "example.com");
@@ -43,8 +44,8 @@ test("suppression hides the native browser footer while publishing feed state", 
 
 		assert.deepEqual(statuses, []);
 		assert.deepEqual(entries, [
-			{ type: BROWSER_FEED_TYPE, payload: { label: "example.com", open: 1 } },
-			{ type: BROWSER_FEED_TYPE, payload: { label: "", open: 0 } },
+			{ type: ENTRY_TYPES.browser, payload: { label: "example.com", open: 1 } },
+			{ type: ENTRY_TYPES.browser, payload: { label: "", open: 0 } },
 		]);
 	} finally {
 		if (previous === undefined) delete process.env.PI_SUPPRESS_NOTIFICATIONS;

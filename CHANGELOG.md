@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `web_browser`: source the session-feed entry type and payload from `@underactive/pi-topping-primitives` 0.1.0; the feed's wire format is unchanged.
+
 ## [0.2.9] - 2026-10-16
 
 ### Added
