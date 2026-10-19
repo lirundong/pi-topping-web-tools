@@ -13,6 +13,7 @@ import {
 	exposurePrerequisiteNotice,
 	loadToolExposureMode,
 	parseToolExposureMode,
+	settingsPath,
 	WEB_TOOLS_NAMESPACE,
 	webToolPresentation,
 } from "../src/tool-exposure.ts";
@@ -225,4 +226,16 @@ test("session_start leaves tools and notices alone for default direct exposure",
 		assert.deepEqual(session.activeTools(), ["read"]);
 		assert.deepEqual(session.notices, []);
 	});
+});
+
+test("an empty PI_WEB_TOOLS_SETTINGS_FILE is treated as unset", () => {
+	const previous = process.env.PI_WEB_TOOLS_SETTINGS_FILE;
+	process.env.PI_WEB_TOOLS_SETTINGS_FILE = "";
+	try {
+		assert.notEqual(settingsPath(), "");
+		assert.ok(settingsPath().endsWith(join("pi-topping-web-tools", "settings.json")));
+	} finally {
+		if (previous === undefined) delete process.env.PI_WEB_TOOLS_SETTINGS_FILE;
+		else process.env.PI_WEB_TOOLS_SETTINGS_FILE = previous;
+	}
 });

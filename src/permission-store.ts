@@ -8,8 +8,9 @@
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { atomicWriteFile } from "@underactive/pi-topping-primitives/settings";
 import { permissionKey } from "./permissions.ts";
 
 export type PermissionScope = "fetch_markdown" | "pdf_extract" | "web_browser";
@@ -169,13 +170,8 @@ async function releaseLock(): Promise<void> {
 }
 
 async function writeStore(grants: Grant[]): Promise<void> {
-	const dir = join(storePath(), "..");
-	await mkdir(dir, { recursive: true });
-
 	const file: StoreFile = { version: 1, grants };
-	const tmp = `${storePath()}.tmp`;
-	await writeFile(tmp, JSON.stringify(file, null, "\t"), { mode: 0o600 });
-	await rename(tmp, storePath());
+	atomicWriteFile(storePath(), JSON.stringify(file, null, "\t"));
 }
 
 /** Add a durable grant. Returns false if the lock could not be acquired. */

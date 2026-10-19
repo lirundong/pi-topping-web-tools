@@ -3,9 +3,8 @@
  * Default remains Pi's direct registration. Other modes are opt-in via settings.json.
  */
 
-import { getAgentDir, type ExtensionAPI, type ToolDefinition, type ToolExposure, type ToolNamespace } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import type { ExtensionAPI, ToolDefinition, ToolExposure, ToolNamespace } from "@earendil-works/pi-coding-agent";
+import { createSettingsStore, sanitize, toppingSettingsPath } from "@underactive/pi-topping-primitives/settings";
 
 export type WebToolsExposureMode = "direct" | "codemode" | "deferred";
 
@@ -23,8 +22,13 @@ export const WEB_TOOLS_NAMESPACE: ToolNamespace = {
 
 const MAX_SETTINGS_BYTES = 64 * 1024;
 
+const defaultSettingsPath = toppingSettingsPath("pi-topping-web-tools");
+const SETTINGS_PATH_ENV = "PI_WEB_TOOLS_SETTINGS_FILE";
+
+/** `PI_WEB_TOOLS_SETTINGS_FILE` wins when non-empty; otherwise the agent-dir default. */
 export function settingsPath(): string {
-	return process.env.PI_WEB_TOOLS_SETTINGS_FILE ?? join(getAgentDir(), "pi-topping-web-tools", "settings.json");
+	const override = process.env[SETTINGS_PATH_ENV];
+	return override ? override : defaultSettingsPath();
 }
 
 export function parseToolExposureMode(value: unknown): WebToolsExposureMode {
@@ -34,30 +38,20 @@ export function parseToolExposureMode(value: unknown): WebToolsExposureMode {
 	return "direct";
 }
 
-export function loadToolExposureMode(path: string = settingsPath()): WebToolsExposureMode {
-	let raw: string;
-	try {
-		raw = readFileSync(path, "utf-8");
-	} catch {
-		return "direct";
-	}
+function exposureStore(path?: string) {
+	return createSettingsStore<WebToolsExposureMode>({
+		path: path === undefined ? defaultSettingsPath : () => path,
+		...(path === undefined ? { pathEnv: SETTINGS_PATH_ENV } : {}),
+		maxBytes: MAX_SETTINGS_BYTES,
+		codec: {
+			sanitize: (raw) => (sanitize.isRecord(raw) ? parseToolExposureMode(raw.toolExposure) : "direct"),
+		},
+	});
+}
 
-	if (Buffer.byteLength(raw) > MAX_SETTINGS_BYTES) {
-		return "direct";
-	}
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return "direct";
-	}
-
-	if (typeof parsed !== "object" || parsed === null) {
-		return "direct";
-	}
-
-	return parseToolExposureMode((parsed as { toolExposure?: unknown }).toolExposure);
+/** A missing, oversized, corrupt or unrecognised file means Pi's direct registration. */
+export function loadToolExposureMode(path?: string): WebToolsExposureMode {
+	return exposureStore(path).read();
 }
 
 export function webToolPresentation(mode: WebToolsExposureMode = loadToolExposureMode()): {
