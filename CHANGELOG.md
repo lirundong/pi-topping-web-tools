@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Depend on `@underactive/pi-topping-primitives` `^0.10.0` (was `^0.9.0`). Nothing it imports changed in between: 0.10.0 removed only the `pi-topping-compact` entry names from `./contracts`, which it never referenced. Every topping now asks for the same range, so an install of several shares one copy of the library. No visible change.
 - Tool-exposure settings are read through the shared `@underactive/pi-topping-primitives` 0.2.0 settings store, and the permission grant store writes through its `atomicWriteFile` (unique temp names, cleaned up on failure). An empty `PI_WEB_TOOLS_SETTINGS_FILE` is now treated as unset instead of as a path. The grant store keeps its own lock file and format.
 - `web_browser`: source the session-feed entry type and payload from `@underactive/pi-topping-primitives` 0.1.0; the feed's wire format is unchanged.
 - Depend on `@underactive/pi-topping-primitives` `^0.9.0`. The environment-flag helpers (`isTruthyEnvFlag`, `suppressNotifications`) and `combineSignals` now come from its `./env` and `./abort` subpaths. Behaviour is unchanged except that a timeout above 2^31 - 1 ms is clamped to that instead of aborting the request after about a millisecond, and a timeout that `AbortSignal.timeout` rejects no longer leaves a stale entry in the active-fetch set.
