@@ -94,7 +94,16 @@ test("close(timeoutMs) resolves within the timeout when cleanup stalls", async (
 		value: () => new Promise<void>(() => {}),
 	});
 	const start = Date.now();
-	await browser.close(50);
+	// close() unrefs its timeout timer so a stalled shutdown cannot delay exit. With the cleanup
+	// stalled, that timer is the only thing left, and Node 22's test runner reads an empty event
+	// loop as a hung test and cancels it (and the next one). Hold the loop open while we wait, but
+	// only for a bounded time, so a close() that ignores its timeout still fails instead of hanging.
+	const keepAlive = setTimeout(() => {}, 5_000);
+	try {
+		await browser.close(50);
+	} finally {
+		clearTimeout(keepAlive);
+	}
 	assert.ok(Date.now() - start < 2000, "close should not hang on a stalled cleanup");
 });
 
