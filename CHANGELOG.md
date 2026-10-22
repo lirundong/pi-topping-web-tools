@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Tested against pi 1.4.0. No break: the extension-facing declaration surface (`ExtensionAPI`, `ToolDefinition`, `ExtensionContext`, `ExtensionUIContext`) is unchanged, pi-ai and pi-tui changes are additive or internal, and the provider-header, summary and classifier changes do not reach these tools. Concurrent extension dialogs no longer replace each other on 1.4.0, so parallel host-permission prompts from several tool calls all settle.
+- Bumped the pinned `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` devDependencies from 1.3.0 to 1.4.0.
 - Depend on `@underactive/pi-topping-primitives` `^0.10.0` (was `^0.9.0`). Nothing it imports changed in between: 0.10.0 removed only the `pi-topping-compact` entry names from `./contracts`, which it never referenced. Every topping now asks for the same range, so an install of several shares one copy of the library. No visible change.
 - Tool-exposure settings are read through the shared `@underactive/pi-topping-primitives` 0.2.0 settings store, and the permission grant store writes through its `atomicWriteFile` (unique temp names, cleaned up on failure). An empty `PI_WEB_TOOLS_SETTINGS_FILE` is now treated as unset instead of as a path. The grant store keeps its own lock file and format.
 - `web_browser`: source the session-feed entry type and payload from `@underactive/pi-topping-primitives` 0.1.0; the feed's wire format is unchanged.
