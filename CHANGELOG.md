@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
 ### Changed
 
 - Tested against pi 1.4.0. No break: the extension-facing declaration surface (`ExtensionAPI`, `ToolDefinition`, `ExtensionContext`, `ExtensionUIContext`) is unchanged, pi-ai and pi-tui changes are additive or internal, and the provider-header, summary and classifier changes do not reach these tools. Concurrent extension dialogs no longer replace each other on 1.4.0, so parallel host-permission prompts from several tool calls all settle.
@@ -10,6 +12,7 @@
 - Tool-exposure settings are read through the shared `@underactive/pi-topping-primitives` 0.2.0 settings store, and the permission grant store writes through its `atomicWriteFile` (unique temp names, cleaned up on failure). An empty `PI_WEB_TOOLS_SETTINGS_FILE` is now treated as unset instead of as a path. The grant store keeps its own lock file and format.
 - `web_browser`: source the session-feed entry type and payload from `@underactive/pi-topping-primitives` 0.1.0; the feed's wire format is unchanged.
 - Depend on `@underactive/pi-topping-primitives` `^0.9.0`. The environment-flag helpers (`isTruthyEnvFlag`, `suppressNotifications`) and `combineSignals` now come from its `./env` and `./abort` subpaths. Behaviour is unchanged except that a timeout above 2^31 - 1 ms is clamped to that instead of aborting the request after about a millisecond, and a timeout that `AbortSignal.timeout` rejects no longer leaves a stale entry in the active-fetch set.
+- `web_browser`: keep the event loop open while `close()` waits on a stalled cleanup, preventing the process from hanging on shutdown.
 
 ## [0.2.9] - 2026-10-16
 
