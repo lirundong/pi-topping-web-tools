@@ -365,7 +365,7 @@ export default function (pi: ExtensionAPI) {
 			"Selectors are CSS selectors, or Playwright's role= and text= selector engines (e.g. role=button[name='Submit'], text=Sign in). If click/type fails, read the returned diagnostics and page snippet and adjust the selector.",
 			"Use frame to target an element inside an iframe: pass a CSS selector for the iframe itself, separate from the element selector.",
 			"Call set_dialog_behavior before the action that triggers a JS dialog (alert/confirm/prompt) — dialogs are dismissed by default, which would silently cancel a confirm(). Use get_dialog_logs to see captured dialogs.",
-			"Page-triggered downloads are captured but not written anywhere automatically; call save_downloads (e.g. right after a click that starts a download) to save every pending download to temp files and get their paths. Downloads over maxBytes are cancelled and reported as skipped.",
+			"Page-triggered downloads are captured but not copied anywhere automatically; call save_downloads (e.g. right after a click that starts a download) to save every pending download to temp files and get their paths. The browser receives a download in full before it can be inspected; a file whose copy would exceed maxBytes is skipped, its partial copy and browser-side temp artifact deleted. An aborted call leaves pending downloads capturable by a retry.",
 			"An approved target=_blank or window.open popup becomes the active tab; an unapproved popup is blocked and closed. Use list_tabs and switch_tab to manage open tabs.",
 			"Use scroll to bring an off-screen element into view (selector) or to scroll the page/container by pixel deltas; use drag for drag-and-drop between two selectors; use upload_file to set files on an <input type=file>.",
 		],
@@ -491,7 +491,7 @@ export default function (pi: ExtensionAPI) {
 			maxBytes: Type.Optional(
 				Type.Number({
 					description:
-						"Maximum bytes per downloaded file (action: save_downloads, default 26214400). Oversized downloads are cancelled and reported as skipped",
+						"Maximum bytes per saved download copy (action: save_downloads, default 26214400). The browser receives a download in full first; an over-cap file is skipped and its temporary copy deleted",
 				}),
 			),
 		}),
@@ -990,20 +990,31 @@ export default function (pi: ExtensionAPI) {
 							timeoutMs: timeout,
 							signal,
 						});
-						const text = formatDownloads(result.saved, result.failed);
 						const totalBytes = result.saved.reduce((sum, s) => sum + s.bytes, 0);
 						const info = await mgr.getPageInfoAsync();
-						return {
-							content: [{ type: "text", text }],
-							details: {
+						// Trusted summary: only tool-computed counts and sizes.
+						const summary = `Saved ${result.saved.length} download(s)${
+							result.failed.length > 0 ? `, ${result.failed.length} skipped` : ""
+						}, ${formatSize(totalBytes)} total.`;
+						// Filenames, paths, and source URLs are page- or
+						// server-controlled, so the per-download metadata stays
+						// inside the untrusted-content wrapper like get_dialog_logs
+						// and list_tabs.
+						const metadata = formatDownloads(result.saved, result.failed);
+						const truncated = await truncateTextResult(
+							`${summary}\n${wrapUntrustedContent(info.url, metadata)}`,
+							{
 								action,
 								url: info.url,
 								title: sanitizeTitle(info.title),
-								bytes: totalBytes,
 								downloadCount: result.saved.length,
 								fullOutputPath:
 									result.saved.length === 1 ? result.saved[0].path : result.directory,
-							} satisfies WebBrowserDetails,
+							},
+						);
+						return {
+							content: [{ type: "text", text: truncated.text }],
+							details: truncated.details,
 							isError: result.saved.length === 0 && result.failed.length > 0,
 						};
 					}
