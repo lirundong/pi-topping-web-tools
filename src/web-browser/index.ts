@@ -23,6 +23,7 @@ import {
 	type DialogEntry,
 	type NavigateResult,
 	type NetworkEntry,
+	type SavedDownload,
 	type ScreenshotResult,
 	type TabInfo,
 } from "./browser-manager.ts";
@@ -63,6 +64,7 @@ const ACTIONS = [
 	"upload_file",
 	"set_dialog_behavior",
 	"get_dialog_logs",
+	"save_downloads",
 	"list_tabs",
 	"switch_tab",
 	"close",
@@ -80,6 +82,7 @@ interface WebBrowserDetails {
 	consoleCount?: number;
 	networkCount?: number;
 	dialogCount?: number;
+	downloadCount?: number;
 	tabCount?: number;
 	fullOutputPath?: string;
 	error?: string;
@@ -122,6 +125,20 @@ function formatDialogLogs(entries: DialogEntry[]): string {
 			return `[${ts}] ${e.type}: "${e.message}"${defaultNote} — ${e.action}ed`;
 		})
 		.join("\n");
+}
+
+function formatDownloads(saved: SavedDownload[], failed: Array<{ filename: string; url: string; reason: string }>): string {
+	if (saved.length === 0 && failed.length === 0) {
+		return "No downloads pending.";
+	}
+	const lines: string[] = [];
+	for (const s of saved) {
+		lines.push(`Saved ${s.path} (${formatSize(s.bytes)}, from ${clipField(s.url)})`);
+	}
+	for (const f of failed) {
+		lines.push(`Skipped ${f.filename}: ${f.reason} (from ${clipField(f.url)})`);
+	}
+	return lines.join("\n");
 }
 
 function formatTabs(tabs: TabInfo[]): string {
@@ -291,6 +308,7 @@ export default function (pi: ExtensionAPI) {
 				`  Console messages: ${info.consoleCount}`,
 				`  Network issues: ${info.networkCount}`,
 				`  Dialogs captured: ${info.dialogCount}`,
+				`  Pending downloads: ${info.downloadCount}`,
 				`  Session-approved hosts: ${sessionPermissions.size}`,
 				`  Saved hosts: ${listGrants().filter((g) => g.scope === "web_browser").length}`,
 			];
@@ -347,11 +365,12 @@ export default function (pi: ExtensionAPI) {
 			"Selectors are CSS selectors, or Playwright's role= and text= selector engines (e.g. role=button[name='Submit'], text=Sign in). If click/type fails, read the returned diagnostics and page snippet and adjust the selector.",
 			"Use frame to target an element inside an iframe: pass a CSS selector for the iframe itself, separate from the element selector.",
 			"Call set_dialog_behavior before the action that triggers a JS dialog (alert/confirm/prompt) — dialogs are dismissed by default, which would silently cancel a confirm(). Use get_dialog_logs to see captured dialogs.",
+			"Page-triggered downloads are captured but not written anywhere automatically; call save_downloads (e.g. right after a click that starts a download) to save every pending download to temp files and get their paths. Downloads over maxBytes are cancelled and reported as skipped.",
 			"An approved target=_blank or window.open popup becomes the active tab; an unapproved popup is blocked and closed. Use list_tabs and switch_tab to manage open tabs.",
 			"Use scroll to bring an off-screen element into view (selector) or to scroll the page/container by pixel deltas; use drag for drag-and-drop between two selectors; use upload_file to set files on an <input type=file>.",
 		],
 		description:
-			"Automate a headless Chromium browser. Actions: navigate, screenshot (toFile), click, type (mode fill|press), hover, press, select_option, set_viewport, evaluate, get_content, get_text, get_markdown, wait_for, get_accessibility_snapshot, get_console_logs, get_network_logs, get_cookies, set_cookies, go_back, go_forward, reload, scroll, drag, upload_file, set_dialog_behavior, get_dialog_logs, list_tabs, switch_tab, close. Returns page content, screenshots (PNG base64 or file path), console logs, network logs, dialog logs, tab lists, or cookie metadata (values redacted).",
+			"Automate a headless Chromium browser. Actions: navigate, screenshot (toFile), click, type (mode fill|press), hover, press, select_option, set_viewport, evaluate, get_content, get_text, get_markdown, wait_for, get_accessibility_snapshot, get_console_logs, get_network_logs, get_cookies, set_cookies, go_back, go_forward, reload, scroll, drag, upload_file, set_dialog_behavior, get_dialog_logs, save_downloads, list_tabs, switch_tab, close. Returns page content, screenshots (PNG base64 or file path), console logs, network logs, dialog logs, saved download paths, tab lists, or cookie metadata (values redacted).",
 		parameters: Type.Object({
 			action: StringEnum(ACTIONS, {
 				description: "Browser action to perform",
@@ -464,7 +483,16 @@ export default function (pi: ExtensionAPI) {
 				),
 			),
 			timeout: Type.Optional(
-				Type.Number({ description: "Timeout in milliseconds for navigation/interaction (default 30000)" }),
+				Type.Number({
+					description:
+						"Timeout in milliseconds for navigation/interaction, and how long save_downloads waits for a download to appear (default 30000)",
+				}),
+			),
+			maxBytes: Type.Optional(
+				Type.Number({
+					description:
+						"Maximum bytes per downloaded file (action: save_downloads, default 26214400). Oversized downloads are cancelled and reported as skipped",
+				}),
 			),
 		}),
 		// Not read-only: click, type, evaluate, set_cookies, and upload_file act on the page.
@@ -956,6 +984,30 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					case "save_downloads": {
+						const result = await mgr.saveDownloads({
+							maxBytes: params.maxBytes,
+							timeoutMs: timeout,
+							signal,
+						});
+						const text = formatDownloads(result.saved, result.failed);
+						const totalBytes = result.saved.reduce((sum, s) => sum + s.bytes, 0);
+						const info = await mgr.getPageInfoAsync();
+						return {
+							content: [{ type: "text", text }],
+							details: {
+								action,
+								url: info.url,
+								title: sanitizeTitle(info.title),
+								bytes: totalBytes,
+								downloadCount: result.saved.length,
+								fullOutputPath:
+									result.saved.length === 1 ? result.saved[0].path : result.directory,
+							} satisfies WebBrowserDetails,
+							isError: result.saved.length === 0 && result.failed.length > 0,
+						};
+					}
+
 					case "list_tabs": {
 						const tabs = await mgr.listTabs();
 						const text = formatTabs(tabs);
@@ -1086,6 +1138,10 @@ export default function (pi: ExtensionAPI) {
 					break;
 				case "get_dialog_logs":
 					text = theme.fg("success", `${details.dialogCount ?? 0} dialog(s)`);
+					break;
+				case "save_downloads":
+					text = theme.fg("success", `Saved ${details.downloadCount ?? 0} download(s)`);
+					if (details.bytes) text += theme.fg("muted", ` (${formatSize(details.bytes)})`);
 					break;
 				case "list_tabs":
 					text = theme.fg("success", `${details.tabCount ?? 0} tab(s)`);

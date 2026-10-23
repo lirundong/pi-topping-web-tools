@@ -20,7 +20,12 @@ import type {
 	WebSocketRoute,
 } from "playwright";
 import { chromium } from "playwright";
-import { basename } from "node:path";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, extname, join } from "node:path";
+import { once } from "node:events";
+import { finished } from "node:stream/promises";
 import { getTurndownService } from "../fetch-markdown.ts";
 import { permissionKey } from "../permissions.ts";
 import { decideRequest, type UrlPermissionChecker } from "./egress-policy.ts";
@@ -30,11 +35,34 @@ export const DEFAULT_VIEWPORT_HEIGHT = 720;
 export const MAX_FULL_PAGE_WIDTH = 1920;
 export const MAX_BUFFER_ENTRIES = 500;
 export const DEFAULT_NAVIGATION_TIMEOUT_MS = 30_000;
+export const DEFAULT_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024;
+export const DEFAULT_DOWNLOAD_WAIT_MS = 30_000;
 const MAX_REDIRECT_HOPS = 20;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 type AbortableOpts = { timeout?: number; signal?: AbortSignal };
 type FrameOpts = { frame?: string };
+
+function maxBytesFrom(opts?: { maxBytes?: number }): number {
+	return opts?.maxBytes !== undefined && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_DOWNLOAD_MAX_BYTES;
+}
+
+/** Keep two same-named downloads from overwriting each other inside one save directory. */
+function dedupeFilename(used: Set<string>, name: string): string {
+	if (!used.has(name)) {
+		used.add(name);
+		return name;
+	}
+	const ext = extname(name);
+	const stem = name.slice(0, name.length - ext.length);
+	for (let i = 2; ; i++) {
+		const candidate = `${stem}-${i}${ext}`;
+		if (!used.has(candidate)) {
+			used.add(candidate);
+			return candidate;
+		}
+	}
+}
 
 /** Strip any path components from a suggested filename; never returns ".", "..", or "". */
 export function sanitizeDownloadFilename(suggested: string): string {
@@ -84,6 +112,25 @@ export type DownloadEntry = {
 	filename: string;
 	pageUrl: string;
 	timestamp: number;
+};
+
+export type SavedDownload = {
+	path: string;
+	filename: string;
+	bytes: number;
+	url: string;
+};
+
+export type FailedDownload = {
+	filename: string;
+	url: string;
+	reason: string;
+};
+
+export type SaveDownloadsResult = {
+	directory: string;
+	saved: SavedDownload[];
+	failed: FailedDownload[];
 };
 
 export type TabInfo = {
@@ -1340,6 +1387,96 @@ export class BrowserManager {
 	/** Read-only view of captured but not-yet-saved downloads. */
 	downloadEntries(): DownloadEntry[] {
 		return [...this.downloadBuffer];
+	}
+
+	/**
+	 * Save every pending download into a fresh temp directory.
+	 *
+	 * Playwright's own download location is a temp directory that is deleted
+	 * when the browser context closes, so each file must be copied out to a
+	 * stable directory for it to survive. If no download is pending yet, wait
+	 * up to `timeoutMs` for one to appear (the triggering click often happens
+	 * immediately before this call). Each file is streamed with a byte cap:
+	 * an oversized download is cancelled, its partial copy deleted, and
+	 * reported in `failed` without failing the whole call.
+	 */
+	async saveDownloads(opts?: {
+		maxBytes?: number;
+		timeoutMs?: number;
+		signal?: AbortSignal;
+	}): Promise<SaveDownloadsResult> {
+		return this.mutex.run(async () => {
+			await this.ensureLaunched();
+			if (this.downloadBuffer.length === 0) {
+				await this.waitForDownload(opts?.timeoutMs ?? DEFAULT_DOWNLOAD_WAIT_MS, {
+					signal: opts?.signal,
+				});
+			}
+			const entries = this.downloadBuffer;
+			this.downloadBuffer = [];
+
+			const directory = await mkdtemp(join(tmpdir(), "pi-web-browser-downloads-"));
+			const usedNames = new Set<string>();
+			const saved: SavedDownload[] = [];
+			const failed: FailedDownload[] = [];
+
+			for (const entry of entries) {
+				const filename = dedupeFilename(usedNames, entry.filename);
+				const target = join(directory, filename);
+				try {
+					const bytes = await this.writeDownloadCapped(entry, target, maxBytesFrom(opts));
+					saved.push({ path: target, filename, bytes, url: entry.url });
+				} catch (err: unknown) {
+					failed.push({
+						filename,
+						url: entry.url,
+						reason: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+
+			return { directory, saved, failed };
+		});
+	}
+
+	private async writeDownloadCapped(
+		entry: DownloadEntry,
+		target: string,
+		maxBytes: number,
+	): Promise<number> {
+		const stream = await entry.download.createReadStream();
+		if (!stream) {
+				throw new Error("download stream is unavailable (already cancelled or failed)");
+		}
+		const out = createWriteStream(target, { mode: 0o600 });
+		let total = 0;
+		try {
+			for await (const chunk of stream) {
+				total += chunk.length;
+				if (total > maxBytes) {
+					throw new Error(`exceeds the maxBytes limit of ${maxBytes} bytes`);
+				}
+				if (!out.write(chunk)) {
+						await once(out, "drain");
+				}
+			}
+			out.end();
+			await finished(out);
+		} catch (err: unknown) {
+			out.destroy();
+			try {
+					await rm(target, { force: true });
+				} catch {
+					// best effort; the file may not exist yet
+				}
+			try {
+					await entry.download.cancel();
+				} catch {
+					// already finished or cancelled — nothing to abort
+				}
+			throw err instanceof Error ? err : new Error(String(err));
+		}
+		return total;
 	}
 
 	/**
