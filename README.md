@@ -193,11 +193,22 @@ Single tool with an `action` parameter:
 | `upload_file` | `selector`, `files`, `frame?` | Set files on an `<input type=file>` (absolute or relative paths; prompts when a file is outside the working directory) |
 | `set_dialog_behavior` | `dialogAction?`, `promptText?` | Configure how future JS dialogs (alert/confirm/prompt) are resolved for the rest of the session (default: dismiss) |
 | `get_dialog_logs` | — | Drain captured dialogs (type, message, default value, resolution) |
+| `save_downloads` | `maxBytes?` | Save every pending page-triggered download to temp files (path, size, source URL per download) |
 | `list_tabs` | — | List open tabs (index, URL, title, active) |
 | `switch_tab` | `index` | Switch the active tab (from `list_tabs`) |
 | `close` | — | Close the browser |
 
-Optional `timeout` (ms, default 30000) applies to navigation and to selector-based actions (click, type, hover, select_option, screenshot, get_text, get_markdown, wait_for, get_accessibility_snapshot, scroll, drag, upload_file). Other actions use Playwright defaults.
+Optional `timeout` (ms, default 30000) applies to navigation and to selector-based actions (click, type, hover, select_option, screenshot, get_text, get_markdown, wait_for, get_accessibility_snapshot, scroll, drag, upload_file), and to `save_downloads` as the wait for a download to appear when none is pending yet. Other actions use Playwright defaults.
+
+### Downloads
+
+`web_browser` accepts downloads triggered by pages: a click on an `<a download>` link, a client-side export that offers a blob URL, or an `attachment` response. Downloads are captured as they start, but nothing is written to disk until you call `save_downloads`, which saves **every pending download** (not just the most recent one) into a fresh temp directory with mode 0600 per file and returns a line per download with its path, size, and source URL. Same-named downloads within one call get `-2`, `-3` suffixes instead of overwriting each other.
+
+The usual flow is click-then-save: the click that starts the download and the `save_downloads` call that collects it are separate, so a single `save_downloads` can pick up a multi-file export. If no download is pending when `save_downloads` is called, it waits up to `timeout` (default 30000 ms) for one to appear.
+
+`maxBytes` (default 25 MiB, the same cap `pdf_extract` applies to downloads) is enforced while streaming: a download larger than the cap is cancelled, its partial copy is deleted, and it is reported as skipped while the rest of the batch still saves. Raise it when an intentionally large download is expected.
+
+Permissions are unchanged: the page origin was already approved on `navigate`, `http(s)` downloads pass through the network egress enforcement like any other request, and `blob:` downloads never produce a routed request at all. Suggested filenames are attacker-controlled, so they are stripped to their final path component before use. Saved downloads are plain files in a temp directory — treat their contents like page content and delete anything sensitive after use.
 
 ### Screenshots and image resize
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `web_browser`: downloads triggered by pages are now usable. The browser context accepts downloads (`acceptDownloads`), captures them with sanitized suggested filenames, and a new `save_downloads` action saves every pending download into a fresh temp directory (mode 0600 per file), returning each file's path, size, and source URL. `maxBytes` (default 25 MiB, enforced while streaming, oversized downloads cancelled and reported as skipped) bounds each file, the generic `timeout` doubles as the wait for a download to appear, and same-named downloads get `-2`, `-3` suffixes. Previously every download was silently cancelled while pages kept reporting success; Playwright's own download location is a context-lifetime temp directory, so `save_downloads` copies files out to a stable directory. `http(s)` downloads stay behind the network egress enforcement and `blob:` downloads produce no routed request, so no permission model change was needed.
+
 ## [0.3.0] - 2026-10-21
 
 ### Changed
