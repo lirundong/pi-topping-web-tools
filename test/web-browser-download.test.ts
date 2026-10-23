@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
+import { tmpdir } from "node:os";
+import type { Download } from "playwright";
 import {
 	BrowserManager,
 	closeBrowserManager,
+	copyDownloadCapped,
 	sanitizeDownloadFilename,
 } from "../src/web-browser/browser-manager.ts";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturePath = join(__dirname, "fixtures", "browser-fixture.html");
@@ -234,5 +238,177 @@ test("saveDownloads sanitizes a crafted Content-Disposition filename from an htt
 	} finally {
 		await browser.close();
 		server.close();
+	}
+});
+
+// ---------------------------------------------------------------------------
+// copyDownloadCapped unit tests (no browser): fake Download objects.
+
+function fakeDownload(chunks: string[], artifactPath?: string) {
+	const calls = { createReadStream: 0, cancel: 0 };
+	const download = {
+		createReadStream: async () => {
+			calls.createReadStream += 1;
+			return Readable.from(chunks.map((c) => Buffer.from(c)));
+		},
+		cancel: async () => {
+			calls.cancel += 1;
+		},
+		path: async () => artifactPath,
+	} as unknown as Download;
+	return { download, calls };
+}
+
+test("copyDownloadCapped copies bytes and returns the total", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "copy-capped-"));
+	const artifact = join(dir, "artifact.bin");
+	const { download } = fakeDownload(["hello ", "world"], artifact);
+	await writeFile(artifact, "x");
+	try {
+		const bytes = await copyDownloadCapped(download, join(dir, "copy.txt"), 1024);
+		assert.equal(bytes, "hello world".length);
+		assert.equal(await readFile(join(dir, "copy.txt"), "utf-8"), "hello world");
+		// Success path keeps the browser-side artifact in place.
+		assert.ok((await stat(artifact)).isFile());
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("copyDownloadCapped rejects over-cap copies, deletes the partial and the artifact", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "copy-capped-"));
+	const artifact = join(dir, "artifact.bin");
+	const { download, calls } = fakeDownload(["hello world"], artifact);
+	await writeFile(artifact, "x");
+	try {
+		await assert.rejects(
+			copyDownloadCapped(download, join(dir, "copy.txt"), 4),
+			/exceeds the maxBytes limit of 4 bytes/,
+		);
+		await assert.rejects(stat(join(dir, "copy.txt")), (err: NodeJS.ErrnoException) => err.code === "ENOENT");
+		// The browser-side artifact is removed along with the partial copy.
+		await assert.rejects(stat(artifact), (err: NodeJS.ErrnoException) => err.code === "ENOENT");
+		assert.equal(calls.cancel, 1);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("copyDownloadCapped write failures reject instead of crashing the process", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "copy-capped-"));
+	// A target directory with no write permission makes the write stream
+	// fail asynchronously after this function has already returned.
+	await chmod(dir, 0o500);
+	const { download } = fakeDownload(["hello world"]);
+	try {
+		await assert.rejects(copyDownloadCapped(download, join(dir, "copy.txt"), 1024));
+	} finally {
+		await chmod(dir, 0o700);
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("copyDownloadCapped honors an already-aborted signal without touching the download", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "copy-capped-"));
+	const { download, calls } = fakeDownload(["hello world"]);
+	const controller = new AbortController();
+	controller.abort();
+	try {
+		await assert.rejects(
+			copyDownloadCapped(download, join(dir, "copy.txt"), 1024, controller.signal),
+			(err: Error) => err.name === "AbortError",
+		);
+		assert.equal(calls.createReadStream, 0);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("copyDownloadCapped abort mid-copy deletes the partial but keeps the artifact", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "copy-capped-"));
+	const artifact = join(dir, "artifact.bin");
+	await writeFile(artifact, "x");
+	const calls = { cancel: 0 };
+	const download = {
+		createReadStream: async () =>
+			Readable.from(
+				(async function* () {
+					yield Buffer.from("first ");
+					await new Promise((resolve) => setTimeout(resolve, 150));
+					yield Buffer.from("second ");
+					await new Promise((resolve) => setTimeout(resolve, 150));
+					yield Buffer.from("third");
+				})(),
+			),
+		cancel: async () => {
+			calls.cancel += 1;
+		},
+		path: async () => artifact,
+	} as unknown as Download;
+	const controller = new AbortController();
+	const pending = copyDownloadCapped(download, join(dir, "copy.txt"), 1024, controller.signal);
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	controller.abort();
+	try {
+		await assert.rejects(pending, (err: Error) => err.name === "AbortError");
+		await assert.rejects(stat(join(dir, "copy.txt")), (err: NodeJS.ErrnoException) => err.code === "ENOENT");
+		// Abort keeps the browser-side artifact so a retry can still save it.
+		assert.ok((await stat(artifact)).isFile());
+		assert.equal(calls.cancel, 0);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Manager-level abort and artifact-cleanup behavior against a real browser.
+
+test("saveDownloads with a pre-aborted signal rejects and keeps entries pending", async () => {
+	const fixture = await startFixtureServer();
+	const browser = new BrowserManager();
+	browser.setOriginChecker(() => true);
+	try {
+		await browser.navigate(fixture.url);
+		await browser.click("#download-link");
+		await browser.waitForDownload(5000);
+
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(
+			browser.saveDownloads({ signal: controller.signal }),
+			(err: Error) => err.name === "AbortError",
+		);
+		// The pending download is preserved for a later save_downloads.
+		assert.equal(browser.downloadEntries().length, 1);
+		// The mutex was released: another action still runs.
+		const text = await browser.getText();
+		assert.match(text, /Browser Test Fixture/);
+	} finally {
+		await browser.close();
+		await fixture.close();
+	}
+});
+
+test("an over-cap save removes the browser-side artifact of the skipped download", async () => {
+	const fixture = await startFixtureServer();
+	const browser = new BrowserManager();
+	browser.setOriginChecker(() => true);
+	try {
+		await browser.navigate(fixture.url);
+		await browser.click("#download-link");
+		await browser.waitForDownload(5000);
+
+		const entry = browser.downloadEntries()[0];
+		const artifact = await entry.download.path();
+		assert.ok(artifact, "the completed download has a browser-side artifact");
+
+		const result = await browser.saveDownloads({ maxBytes: 4, timeoutMs: 5000 });
+		assert.equal(result.saved.length, 0);
+		assert.equal(result.failed.length, 1);
+		// The skipped download's browser-side artifact was cleaned up.
+		await assert.rejects(stat(artifact), (err: NodeJS.ErrnoException) => err.code === "ENOENT");
+	} finally {
+		await browser.close();
+		await fixture.close();
 	}
 });

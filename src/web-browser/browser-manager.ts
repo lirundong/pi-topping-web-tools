@@ -24,8 +24,8 @@ import { createWriteStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
-import { once } from "node:events";
-import { finished } from "node:stream/promises";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { getTurndownService } from "../fetch-markdown.ts";
 import { permissionKey } from "../permissions.ts";
 import { decideRequest, type UrlPermissionChecker } from "./egress-policy.ts";
@@ -45,6 +45,88 @@ type FrameOpts = { frame?: string };
 
 function maxBytesFrom(opts?: { maxBytes?: number }): number {
 	return opts?.maxBytes !== undefined && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_DOWNLOAD_MAX_BYTES;
+}
+
+function isAbortError(err: unknown): boolean {
+	return err instanceof Error && err.name === "AbortError";
+}
+
+/**
+ * Copy a completed download into `target`, bounding the saved copy at
+ * `maxBytes` bytes.
+ *
+ * Playwright's createReadStream only yields bytes after the download has
+ * fully landed in the browser-side temp file, so this cap is applied to the
+ * *copy*, not the download: the browser has already received the file by the
+ * time it can be measured. On any failure the partial copy is deleted; on a
+ * non-abort failure the browser-side temp artifact is also removed so an
+ * over-cap file does not sit on disk until the context closes (cancel() is
+ * kept as a no-op-tolerant best effort for in-flight downloads). An aborted
+ * `signal` rejects with AbortError and deliberately leaves the artifact in
+ * place — the download stays saveable by a later retry.
+ *
+ * pipeline() attaches error handling to the write stream from creation, so a
+ * failed open or write (EACCES, ENOSPC, ENAMETOOLONG, …) rejects this
+ * promise instead of escaping as an unhandled 'error' event.
+ */
+export async function copyDownloadCapped(
+	download: Download,
+	target: string,
+	maxBytes: number,
+	signal?: AbortSignal,
+): Promise<number> {
+	if (signal?.aborted) {
+		throw new DOMException("Aborted", "AbortError");
+	}
+	const source = await download.createReadStream();
+	if (!source) {
+		throw new Error("download stream is unavailable (already cancelled or failed)");
+	}
+
+	let total = 0;
+	const capped = new Transform({
+		transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null, data?: Buffer) => void) {
+			total += chunk.length;
+			if (total > maxBytes) {
+				callback(new Error(`exceeds the maxBytes limit of ${maxBytes} bytes`));
+				return;
+			}
+			callback(null, chunk);
+		},
+	});
+
+	const onAbort = () => {
+		source.destroy(new DOMException("Aborted", "AbortError"));
+	};
+	signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		await pipeline(source, capped, createWriteStream(target, { mode: 0o600 }));
+	} catch (err: unknown) {
+		try {
+			await rm(target, { force: true });
+		} catch {
+			// best effort; the file may not exist yet
+		}
+		if (!isAbortError(err)) {
+			try {
+				await download.cancel();
+			} catch {
+				// already finished or cancelled — nothing to abort
+			}
+			try {
+				const artifact = await download.path();
+				if (artifact) {
+					await rm(artifact, { force: true });
+				}
+			} catch {
+				// failed/cancelled downloads have no accessible artifact
+			}
+		}
+		throw err instanceof Error ? err : new Error(String(err));
+	} finally {
+		signal?.removeEventListener("abort", onAbort);
+	}
+	return total;
 }
 
 /** Keep two same-named downloads from overwriting each other inside one save directory. */
@@ -1374,13 +1456,36 @@ export class BrowserManager {
 	private pushDownload(entry: DownloadEntry): void {
 		this.downloadBuffer.push(entry);
 		if (this.downloadBuffer.length >= MAX_BUFFER_ENTRIES) {
-			this.downloadBuffer = this.downloadBuffer.slice(MAX_BUFFER_ENTRIES >> 1);
+			const dropped = this.downloadBuffer.slice(0, MAX_BUFFER_ENTRIES >> 1);
+			this.downloadBuffer = this.downloadBuffer.slice(dropped.length);
+			// Fire-and-forget: evicted downloads are no longer saveable, so
+			// their browser-side artifacts are cleaned up best effort.
+			for (const evicted of dropped) {
+				this.disposeDownload(evicted.download).catch(() => {});
+			}
 		}
 		// Wake saveDownloads()/waitForDownload() callers waiting for a download.
 		const waiters = this.downloadWaiters;
 		this.downloadWaiters = [];
 		for (const resolve of waiters) {
 			resolve();
+		}
+	}
+
+	/** Best-effort cleanup of a download we will never save: cancel it if still in flight and remove the completed artifact. */
+	private async disposeDownload(download: Download): Promise<void> {
+		try {
+			await download.cancel();
+		} catch {
+			// already finished or cancelled — nothing to abort
+		}
+		try {
+			const artifact = await download.path();
+			if (artifact) {
+				await rm(artifact, { force: true });
+			}
+		} catch {
+			// failed/cancelled downloads have no accessible artifact
 		}
 	}
 
@@ -1396,9 +1501,19 @@ export class BrowserManager {
 	 * when the browser context closes, so each file must be copied out to a
 	 * stable directory for it to survive. If no download is pending yet, wait
 	 * up to `timeoutMs` for one to appear (the triggering click often happens
-	 * immediately before this call). Each file is streamed with a byte cap:
-	 * an oversized download is cancelled, its partial copy deleted, and
-	 * reported in `failed` without failing the whole call.
+	 * immediately before this call).
+	 *
+	 * `maxBytes` bounds the saved copy. The browser has already received the
+	 * full download by the time its bytes are readable (Playwright's
+	 * createReadStream reads a completed local file), so a copy that exceeds
+	 * the cap cannot un-download the original: the partial copy is deleted,
+	 * the browser-side temp artifact is removed, and the download is reported
+	 * in `failed` without failing the rest of the batch.
+	 *
+	 * Abort: a rejected `signal` (before or during the call) stops the save
+	 * with an AbortError. The entry being copied keeps its browser-side
+	 * artifact, and it plus every untouched pending entry are returned to the
+	 * capture buffer, so a retried save_downloads can still save them.
 	 */
 	async saveDownloads(opts?: {
 		maxBytes?: number;
@@ -1406,6 +1521,9 @@ export class BrowserManager {
 		signal?: AbortSignal;
 	}): Promise<SaveDownloadsResult> {
 		return this.mutex.run(async () => {
+			if (opts?.signal?.aborted) {
+				throw new DOMException("Aborted", "AbortError");
+			}
 			await this.ensureLaunched();
 			if (this.downloadBuffer.length === 0) {
 				await this.waitForDownload(opts?.timeoutMs ?? DEFAULT_DOWNLOAD_WAIT_MS, {
@@ -1420,13 +1538,25 @@ export class BrowserManager {
 			const saved: SavedDownload[] = [];
 			const failed: FailedDownload[] = [];
 
-			for (const entry of entries) {
+			for (let i = 0; i < entries.length; i++) {
+				const entry = entries[i];
 				const filename = dedupeFilename(usedNames, entry.filename);
 				const target = join(directory, filename);
 				try {
-					const bytes = await this.writeDownloadCapped(entry, target, maxBytesFrom(opts));
+					const bytes = await copyDownloadCapped(
+						entry.download,
+						target,
+						maxBytesFrom(opts),
+						opts?.signal,
+					);
 					saved.push({ path: target, filename, bytes, url: entry.url });
 				} catch (err: unknown) {
+					if (isAbortError(err)) {
+						// Keep this entry and the untouched remainder pending so a
+						// retried save_downloads can still save them.
+						this.downloadBuffer = [...entries.slice(i), ...this.downloadBuffer];
+						throw err;
+					}
 					failed.push({
 						filename,
 						url: entry.url,
@@ -1437,46 +1567,6 @@ export class BrowserManager {
 
 			return { directory, saved, failed };
 		});
-	}
-
-	private async writeDownloadCapped(
-		entry: DownloadEntry,
-		target: string,
-		maxBytes: number,
-	): Promise<number> {
-		const stream = await entry.download.createReadStream();
-		if (!stream) {
-				throw new Error("download stream is unavailable (already cancelled or failed)");
-		}
-		const out = createWriteStream(target, { mode: 0o600 });
-		let total = 0;
-		try {
-			for await (const chunk of stream) {
-				total += chunk.length;
-				if (total > maxBytes) {
-					throw new Error(`exceeds the maxBytes limit of ${maxBytes} bytes`);
-				}
-				if (!out.write(chunk)) {
-						await once(out, "drain");
-				}
-			}
-			out.end();
-			await finished(out);
-		} catch (err: unknown) {
-			out.destroy();
-			try {
-					await rm(target, { force: true });
-				} catch {
-					// best effort; the file may not exist yet
-				}
-			try {
-					await entry.download.cancel();
-				} catch {
-					// already finished or cancelled — nothing to abort
-				}
-			throw err instanceof Error ? err : new Error(String(err));
-		}
-		return total;
 	}
 
 	/**
