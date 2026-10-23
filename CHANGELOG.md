@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `web_browser`: downloads triggered by pages are now usable. The browser context accepts downloads (`acceptDownloads`), captures them with sanitized suggested filenames, and a new `save_downloads` action saves every pending download into a fresh temp directory (mode 0600 per file), returning each file's path, size, and source URL inside the untrusted-content wrapper behind a trusted summary. `maxBytes` (default 25 MiB) bounds the **saved copy**: the browser receives a download in full before its bytes are readable, so an over-cap file is skipped with its partial copy and browser-side temp artifact deleted while the rest of the batch still saves. A rejected `signal` aborts at any stage, leaving pending downloads saveable by a retry; entries evicted from the capture buffer have their artifacts cleaned up. The generic `timeout` doubles as the wait for a download to appear, and same-named downloads get `-2`, `-3` suffixes. Previously every download was silently discarded while pages kept reporting success; `http(s)` downloads stay behind the network egress enforcement and `blob:` downloads produce no routed request, so no permission model change was needed.
+
 ## [0.3.0] - 2026-10-21
 
 ### Changed

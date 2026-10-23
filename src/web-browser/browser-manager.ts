@@ -12,6 +12,7 @@ import type {
 	Browser,
 	BrowserContext,
 	Cookie,
+	Download,
 	Locator,
 	Page,
 	Response,
@@ -19,6 +20,12 @@ import type {
 	WebSocketRoute,
 } from "playwright";
 import { chromium } from "playwright";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, extname, join } from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { getTurndownService } from "../fetch-markdown.ts";
 import { permissionKey } from "../permissions.ts";
 import { decideRequest, type UrlPermissionChecker } from "./egress-policy.ts";
@@ -28,11 +35,125 @@ export const DEFAULT_VIEWPORT_HEIGHT = 720;
 export const MAX_FULL_PAGE_WIDTH = 1920;
 export const MAX_BUFFER_ENTRIES = 500;
 export const DEFAULT_NAVIGATION_TIMEOUT_MS = 30_000;
+export const DEFAULT_DOWNLOAD_MAX_BYTES = 25 * 1024 * 1024;
+export const DEFAULT_DOWNLOAD_WAIT_MS = 30_000;
 const MAX_REDIRECT_HOPS = 20;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 type AbortableOpts = { timeout?: number; signal?: AbortSignal };
 type FrameOpts = { frame?: string };
+
+function maxBytesFrom(opts?: { maxBytes?: number }): number {
+	return opts?.maxBytes !== undefined && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_DOWNLOAD_MAX_BYTES;
+}
+
+function isAbortError(err: unknown): boolean {
+	return err instanceof Error && err.name === "AbortError";
+}
+
+/**
+ * Copy a completed download into `target`, bounding the saved copy at
+ * `maxBytes` bytes.
+ *
+ * Playwright's createReadStream only yields bytes after the download has
+ * fully landed in the browser-side temp file, so this cap is applied to the
+ * *copy*, not the download: the browser has already received the file by the
+ * time it can be measured. On any failure the partial copy is deleted; on a
+ * non-abort failure the browser-side temp artifact is also removed so an
+ * over-cap file does not sit on disk until the context closes (cancel() is
+ * kept as a no-op-tolerant best effort for in-flight downloads). An aborted
+ * `signal` rejects with AbortError and deliberately leaves the artifact in
+ * place — the download stays saveable by a later retry.
+ *
+ * pipeline() attaches error handling to the write stream from creation, so a
+ * failed open or write (EACCES, ENOSPC, ENAMETOOLONG, …) rejects this
+ * promise instead of escaping as an unhandled 'error' event.
+ */
+export async function copyDownloadCapped(
+	download: Download,
+	target: string,
+	maxBytes: number,
+	signal?: AbortSignal,
+): Promise<number> {
+	if (signal?.aborted) {
+		throw new DOMException("Aborted", "AbortError");
+	}
+	const source = await download.createReadStream();
+	if (!source) {
+		throw new Error("download stream is unavailable (already cancelled or failed)");
+	}
+
+	let total = 0;
+	const capped = new Transform({
+		transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null, data?: Buffer) => void) {
+			total += chunk.length;
+			if (total > maxBytes) {
+				callback(new Error(`exceeds the maxBytes limit of ${maxBytes} bytes`));
+				return;
+			}
+			callback(null, chunk);
+		},
+	});
+
+	const onAbort = () => {
+		source.destroy(new DOMException("Aborted", "AbortError"));
+	};
+	signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		await pipeline(source, capped, createWriteStream(target, { mode: 0o600 }));
+	} catch (err: unknown) {
+		try {
+			await rm(target, { force: true });
+		} catch {
+			// best effort; the file may not exist yet
+		}
+		if (!isAbortError(err)) {
+			try {
+				await download.cancel();
+			} catch {
+				// already finished or cancelled — nothing to abort
+			}
+			try {
+				const artifact = await download.path();
+				if (artifact) {
+					await rm(artifact, { force: true });
+				}
+			} catch {
+				// failed/cancelled downloads have no accessible artifact
+			}
+		}
+		throw err instanceof Error ? err : new Error(String(err));
+	} finally {
+		signal?.removeEventListener("abort", onAbort);
+	}
+	return total;
+}
+
+/** Keep two same-named downloads from overwriting each other inside one save directory. */
+function dedupeFilename(used: Set<string>, name: string): string {
+	if (!used.has(name)) {
+		used.add(name);
+		return name;
+	}
+	const ext = extname(name);
+	const stem = name.slice(0, name.length - ext.length);
+	for (let i = 2; ; i++) {
+		const candidate = `${stem}-${i}${ext}`;
+		if (!used.has(candidate)) {
+			used.add(candidate);
+			return candidate;
+		}
+	}
+}
+
+/** Strip any path components from a suggested filename; never returns ".", "..", or "". */
+export function sanitizeDownloadFilename(suggested: string): string {
+	const name = basename(suggested.replaceAll("\\", "/").trim());
+	if (name && !/^\.*$/.test(name)) {
+		return name;
+	}
+	return `download-${Date.now()}`;
+}
 
 function parsePngDimensions(buffer: Buffer): { width: number; height: number } | undefined {
 	if (buffer.length < 24) return undefined;
@@ -67,6 +188,33 @@ export type DialogEntry = {
 	timestamp: number;
 };
 
+export type DownloadEntry = {
+	download: Download;
+	url: string;
+	filename: string;
+	pageUrl: string;
+	timestamp: number;
+};
+
+export type SavedDownload = {
+	path: string;
+	filename: string;
+	bytes: number;
+	url: string;
+};
+
+export type FailedDownload = {
+	filename: string;
+	url: string;
+	reason: string;
+};
+
+export type SaveDownloadsResult = {
+	directory: string;
+	saved: SavedDownload[];
+	failed: FailedDownload[];
+};
+
 export type TabInfo = {
 	index: number;
 	url: string;
@@ -98,6 +246,7 @@ export type PageInfo = {
 	consoleCount: number;
 	networkCount: number;
 	dialogCount: number;
+	downloadCount: number;
 	tabCount: number;
 };
 
@@ -146,6 +295,8 @@ export class BrowserManager {
 	private consoleBuffer: ConsoleEntry[] = [];
 	private networkBuffer: NetworkEntry[] = [];
 	private dialogBuffer: DialogEntry[] = [];
+	private downloadBuffer: DownloadEntry[] = [];
+	private downloadWaiters: Array<() => void> = [];
 	private dialogBehavior: DialogBehavior = { action: "dismiss" };
 	private originChecker: UrlPermissionChecker = () => false;
 	private lastBlockedDocumentUrl: string | undefined;
@@ -169,6 +320,7 @@ export class BrowserManager {
 					consoleCount: this.consoleBuffer.length,
 					networkCount: this.networkBuffer.length,
 					dialogCount: this.dialogBuffer.length,
+					downloadCount: this.downloadBuffer.length,
 					tabCount: 0,
 				};
 			}
@@ -188,6 +340,7 @@ export class BrowserManager {
 				consoleCount: this.consoleBuffer.length,
 				networkCount: this.networkBuffer.length,
 				dialogCount: this.dialogBuffer.length,
+					downloadCount: this.downloadBuffer.length,
 				tabCount: this.context?.pages().filter((p) => !p.isClosed()).length ?? 1,
 			};
 		});
@@ -899,7 +1052,7 @@ export class BrowserManager {
 					width: DEFAULT_VIEWPORT_WIDTH,
 					height: DEFAULT_VIEWPORT_HEIGHT,
 				},
-				acceptDownloads: false,
+				acceptDownloads: true,
 				serviceWorkers: "block",
 			});
 			await this.context.route("**/*", (route) => this.enforceEgress(route));
@@ -929,6 +1082,7 @@ export class BrowserManager {
 	private registerPage(page: Page): void {
 		this.attachConsoleListeners(page);
 		this.attachDialogListener(page);
+		this.attachDownloadListener(page);
 
 		let pendingActivation = this.page !== undefined && !this.page.isClosed();
 		if (!pendingActivation) {
@@ -1244,6 +1398,19 @@ export class BrowserManager {
 		});
 	}
 
+	private attachDownloadListener(page: Page): void {
+		page.on("download", (download) => {
+			const entry: DownloadEntry = {
+				download,
+				url: download.url(),
+				filename: sanitizeDownloadFilename(download.suggestedFilename()),
+				pageUrl: page.url(),
+				timestamp: Date.now(),
+			};
+			this.pushDownload(entry);
+		});
+	}
+
 	private attachDialogListener(page: Page): void {
 		page.on("dialog", (dialog) => {
 			const entry: DialogEntry = {
@@ -1286,6 +1453,166 @@ export class BrowserManager {
 		}
 	}
 
+	private pushDownload(entry: DownloadEntry): void {
+		this.downloadBuffer.push(entry);
+		if (this.downloadBuffer.length >= MAX_BUFFER_ENTRIES) {
+			const dropped = this.downloadBuffer.slice(0, MAX_BUFFER_ENTRIES >> 1);
+			this.downloadBuffer = this.downloadBuffer.slice(dropped.length);
+			// Fire-and-forget: evicted downloads are no longer saveable, so
+			// their browser-side artifacts are cleaned up best effort.
+			for (const evicted of dropped) {
+				this.disposeDownload(evicted.download).catch(() => {});
+			}
+		}
+		// Wake saveDownloads()/waitForDownload() callers waiting for a download.
+		const waiters = this.downloadWaiters;
+		this.downloadWaiters = [];
+		for (const resolve of waiters) {
+			resolve();
+		}
+	}
+
+	/** Best-effort cleanup of a download we will never save: cancel it if still in flight and remove the completed artifact. */
+	private async disposeDownload(download: Download): Promise<void> {
+		try {
+			await download.cancel();
+		} catch {
+			// already finished or cancelled — nothing to abort
+		}
+		try {
+			const artifact = await download.path();
+			if (artifact) {
+				await rm(artifact, { force: true });
+			}
+		} catch {
+			// failed/cancelled downloads have no accessible artifact
+		}
+	}
+
+	/** Read-only view of captured but not-yet-saved downloads. */
+	downloadEntries(): DownloadEntry[] {
+		return [...this.downloadBuffer];
+	}
+
+	/**
+	 * Save every pending download into a fresh temp directory.
+	 *
+	 * Playwright's own download location is a temp directory that is deleted
+	 * when the browser context closes, so each file must be copied out to a
+	 * stable directory for it to survive. If no download is pending yet, wait
+	 * up to `timeoutMs` for one to appear (the triggering click often happens
+	 * immediately before this call).
+	 *
+	 * `maxBytes` bounds the saved copy. The browser has already received the
+	 * full download by the time its bytes are readable (Playwright's
+	 * createReadStream reads a completed local file), so a copy that exceeds
+	 * the cap cannot un-download the original: the partial copy is deleted,
+	 * the browser-side temp artifact is removed, and the download is reported
+	 * in `failed` without failing the rest of the batch.
+	 *
+	 * Abort: a rejected `signal` (before or during the call) stops the save
+	 * with an AbortError. The entry being copied keeps its browser-side
+	 * artifact, and it plus every untouched pending entry are returned to the
+	 * capture buffer, so a retried save_downloads can still save them.
+	 */
+	async saveDownloads(opts?: {
+		maxBytes?: number;
+		timeoutMs?: number;
+		signal?: AbortSignal;
+	}): Promise<SaveDownloadsResult> {
+		return this.mutex.run(async () => {
+			if (opts?.signal?.aborted) {
+				throw new DOMException("Aborted", "AbortError");
+			}
+			await this.ensureLaunched();
+			if (this.downloadBuffer.length === 0) {
+				await this.waitForDownload(opts?.timeoutMs ?? DEFAULT_DOWNLOAD_WAIT_MS, {
+					signal: opts?.signal,
+				});
+			}
+			const entries = this.downloadBuffer;
+			this.downloadBuffer = [];
+
+			const directory = await mkdtemp(join(tmpdir(), "pi-web-browser-downloads-"));
+			const usedNames = new Set<string>();
+			const saved: SavedDownload[] = [];
+			const failed: FailedDownload[] = [];
+
+			for (let i = 0; i < entries.length; i++) {
+				const entry = entries[i];
+				const filename = dedupeFilename(usedNames, entry.filename);
+				const target = join(directory, filename);
+				try {
+					const bytes = await copyDownloadCapped(
+						entry.download,
+						target,
+						maxBytesFrom(opts),
+						opts?.signal,
+					);
+					saved.push({ path: target, filename, bytes, url: entry.url });
+				} catch (err: unknown) {
+					if (isAbortError(err)) {
+						// Keep this entry and the untouched remainder pending so a
+						// retried save_downloads can still save them.
+						this.downloadBuffer = [...entries.slice(i), ...this.downloadBuffer];
+						throw err;
+					}
+					failed.push({
+						filename,
+						url: entry.url,
+						reason: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+
+			return { directory, saved, failed };
+		});
+	}
+
+	/**
+	 * Resolve as soon as at least one download is pending, or reject once
+	 * `timeoutMs` has passed without one. Downloads can arrive while a
+	 * caller is inside the mutex (the event listener runs outside it), so
+	 * this does not take the mutex.
+	 */
+	async waitForDownload(timeoutMs: number, opts?: { signal?: AbortSignal }): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (this.downloadBuffer.length === 0) {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				throw new Error(`No download appeared within ${timeoutMs} ms`);
+			}
+			await new Promise<void>((resolve, reject) => {
+				if (opts?.signal?.aborted) {
+					reject(new DOMException("Aborted", "AbortError"));
+					return;
+				}
+				const cleanup = () => {
+					const i = this.downloadWaiters.indexOf(waiter);
+					if (i >= 0) this.downloadWaiters.splice(i, 1);
+					opts?.signal?.removeEventListener("abort", onAbort);
+				};
+				const onTimer = () => {
+					cleanup();
+				resolve(); // loop re-checks the buffer and the deadline
+				};
+				const onAbort = () => {
+					cleanup();
+					clearTimeout(timer);
+						reject(new DOMException("Aborted", "AbortError"));
+				};
+				const waiter = () => {
+					cleanup();
+					clearTimeout(timer);
+					resolve();
+				};
+				const timer = setTimeout(onTimer, remaining);
+				this.downloadWaiters.push(waiter);
+				opts?.signal?.addEventListener("abort", onAbort, { once: true });
+			});
+		}
+	}
+
 	private async pageSnippet(page: Page): Promise<string> {
 		return page.evaluate(() => document.documentElement.outerHTML.slice(0, 2000));
 	}
@@ -1294,6 +1621,13 @@ export class BrowserManager {
 		this.consoleBuffer = [];
 		this.networkBuffer = [];
 		this.dialogBuffer = [];
+		this.downloadBuffer = [];
+		// Release waiters; they re-check the (now empty) buffer and time out.
+		const waiters = this.downloadWaiters;
+		this.downloadWaiters = [];
+		for (const resolve of waiters) {
+			resolve();
+		}
 		this.lastBlockedDocumentUrl = undefined;
 
 		try {
