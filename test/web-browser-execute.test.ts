@@ -127,6 +127,7 @@ test("toFile screenshots are written with mode 0600", async () => {
 		consoleCount: 0,
 		networkCount: 0,
 		dialogCount: 0,
+		downloadCount: 0,
 		tabCount: 1,
 	});
 	const ctx = {
@@ -159,6 +160,7 @@ test("truncated text output is written with mode 0600", async () => {
 		consoleCount: 0,
 		networkCount: 0,
 		dialogCount: 0,
+		downloadCount: 0,
 		tabCount: 1,
 	});
 	const ctx = {

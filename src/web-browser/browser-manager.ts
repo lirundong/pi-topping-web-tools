@@ -12,6 +12,7 @@ import type {
 	Browser,
 	BrowserContext,
 	Cookie,
+	Download,
 	Locator,
 	Page,
 	Response,
@@ -19,6 +20,7 @@ import type {
 	WebSocketRoute,
 } from "playwright";
 import { chromium } from "playwright";
+import { basename } from "node:path";
 import { getTurndownService } from "../fetch-markdown.ts";
 import { permissionKey } from "../permissions.ts";
 import { decideRequest, type UrlPermissionChecker } from "./egress-policy.ts";
@@ -33,6 +35,15 @@ const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 type AbortableOpts = { timeout?: number; signal?: AbortSignal };
 type FrameOpts = { frame?: string };
+
+/** Strip any path components from a suggested filename; never returns ".", "..", or "". */
+export function sanitizeDownloadFilename(suggested: string): string {
+	const name = basename(suggested.replaceAll("\\", "/").trim());
+	if (name && !/^\.*$/.test(name)) {
+		return name;
+	}
+	return `download-${Date.now()}`;
+}
 
 function parsePngDimensions(buffer: Buffer): { width: number; height: number } | undefined {
 	if (buffer.length < 24) return undefined;
@@ -67,6 +78,14 @@ export type DialogEntry = {
 	timestamp: number;
 };
 
+export type DownloadEntry = {
+	download: Download;
+	url: string;
+	filename: string;
+	pageUrl: string;
+	timestamp: number;
+};
+
 export type TabInfo = {
 	index: number;
 	url: string;
@@ -98,6 +117,7 @@ export type PageInfo = {
 	consoleCount: number;
 	networkCount: number;
 	dialogCount: number;
+	downloadCount: number;
 	tabCount: number;
 };
 
@@ -146,6 +166,8 @@ export class BrowserManager {
 	private consoleBuffer: ConsoleEntry[] = [];
 	private networkBuffer: NetworkEntry[] = [];
 	private dialogBuffer: DialogEntry[] = [];
+	private downloadBuffer: DownloadEntry[] = [];
+	private downloadWaiters: Array<() => void> = [];
 	private dialogBehavior: DialogBehavior = { action: "dismiss" };
 	private originChecker: UrlPermissionChecker = () => false;
 	private lastBlockedDocumentUrl: string | undefined;
@@ -169,6 +191,7 @@ export class BrowserManager {
 					consoleCount: this.consoleBuffer.length,
 					networkCount: this.networkBuffer.length,
 					dialogCount: this.dialogBuffer.length,
+					downloadCount: this.downloadBuffer.length,
 					tabCount: 0,
 				};
 			}
@@ -188,6 +211,7 @@ export class BrowserManager {
 				consoleCount: this.consoleBuffer.length,
 				networkCount: this.networkBuffer.length,
 				dialogCount: this.dialogBuffer.length,
+					downloadCount: this.downloadBuffer.length,
 				tabCount: this.context?.pages().filter((p) => !p.isClosed()).length ?? 1,
 			};
 		});
@@ -899,7 +923,7 @@ export class BrowserManager {
 					width: DEFAULT_VIEWPORT_WIDTH,
 					height: DEFAULT_VIEWPORT_HEIGHT,
 				},
-				acceptDownloads: false,
+				acceptDownloads: true,
 				serviceWorkers: "block",
 			});
 			await this.context.route("**/*", (route) => this.enforceEgress(route));
@@ -929,6 +953,7 @@ export class BrowserManager {
 	private registerPage(page: Page): void {
 		this.attachConsoleListeners(page);
 		this.attachDialogListener(page);
+		this.attachDownloadListener(page);
 
 		let pendingActivation = this.page !== undefined && !this.page.isClosed();
 		if (!pendingActivation) {
@@ -1244,6 +1269,19 @@ export class BrowserManager {
 		});
 	}
 
+	private attachDownloadListener(page: Page): void {
+		page.on("download", (download) => {
+			const entry: DownloadEntry = {
+				download,
+				url: download.url(),
+				filename: sanitizeDownloadFilename(download.suggestedFilename()),
+				pageUrl: page.url(),
+				timestamp: Date.now(),
+			};
+			this.pushDownload(entry);
+		});
+	}
+
 	private attachDialogListener(page: Page): void {
 		page.on("dialog", (dialog) => {
 			const entry: DialogEntry = {
@@ -1286,6 +1324,68 @@ export class BrowserManager {
 		}
 	}
 
+	private pushDownload(entry: DownloadEntry): void {
+		this.downloadBuffer.push(entry);
+		if (this.downloadBuffer.length >= MAX_BUFFER_ENTRIES) {
+			this.downloadBuffer = this.downloadBuffer.slice(MAX_BUFFER_ENTRIES >> 1);
+		}
+		// Wake saveDownloads()/waitForDownload() callers waiting for a download.
+		const waiters = this.downloadWaiters;
+		this.downloadWaiters = [];
+		for (const resolve of waiters) {
+			resolve();
+		}
+	}
+
+	/** Read-only view of captured but not-yet-saved downloads. */
+	downloadEntries(): DownloadEntry[] {
+		return [...this.downloadBuffer];
+	}
+
+	/**
+	 * Resolve as soon as at least one download is pending, or reject once
+	 * `timeoutMs` has passed without one. Downloads can arrive while a
+	 * caller is inside the mutex (the event listener runs outside it), so
+	 * this does not take the mutex.
+	 */
+	async waitForDownload(timeoutMs: number, opts?: { signal?: AbortSignal }): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (this.downloadBuffer.length === 0) {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				throw new Error(`No download appeared within ${timeoutMs} ms`);
+			}
+			await new Promise<void>((resolve, reject) => {
+				if (opts?.signal?.aborted) {
+					reject(new DOMException("Aborted", "AbortError"));
+					return;
+				}
+				const cleanup = () => {
+					const i = this.downloadWaiters.indexOf(waiter);
+					if (i >= 0) this.downloadWaiters.splice(i, 1);
+					opts?.signal?.removeEventListener("abort", onAbort);
+				};
+				const onTimer = () => {
+					cleanup();
+				resolve(); // loop re-checks the buffer and the deadline
+				};
+				const onAbort = () => {
+					cleanup();
+					clearTimeout(timer);
+						reject(new DOMException("Aborted", "AbortError"));
+				};
+				const waiter = () => {
+					cleanup();
+					clearTimeout(timer);
+					resolve();
+				};
+				const timer = setTimeout(onTimer, remaining);
+				this.downloadWaiters.push(waiter);
+				opts?.signal?.addEventListener("abort", onAbort, { once: true });
+			});
+		}
+	}
+
 	private async pageSnippet(page: Page): Promise<string> {
 		return page.evaluate(() => document.documentElement.outerHTML.slice(0, 2000));
 	}
@@ -1294,6 +1394,13 @@ export class BrowserManager {
 		this.consoleBuffer = [];
 		this.networkBuffer = [];
 		this.dialogBuffer = [];
+		this.downloadBuffer = [];
+		// Release waiters; they re-check the (now empty) buffer and time out.
+		const waiters = this.downloadWaiters;
+		this.downloadWaiters = [];
+		for (const resolve of waiters) {
+			resolve();
+		}
 		this.lastBlockedDocumentUrl = undefined;
 
 		try {

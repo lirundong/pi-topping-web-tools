@@ -83,6 +83,7 @@ for (const { name, injectedUrl, expected } of cases) {
 				consoleCount: 0,
 				networkCount: 0,
 				dialogCount: 0,
+		downloadCount: 0,
 				tabCount: 1,
 			};
 		};
@@ -140,6 +141,7 @@ test("wrapUntrustedContent escapes mixed-case and reconstructed closing tags in 
 				consoleCount: 0,
 				networkCount: 0,
 				dialogCount: 0,
+		downloadCount: 0,
 				tabCount: 1,
 			};
 		};

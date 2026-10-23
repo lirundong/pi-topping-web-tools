@@ -43,6 +43,8 @@
 
   <a id="popup-link" href="/?popup=1" target="_blank">Open popup</a>
 
+  <a id="download-link" download="fixture-download.txt">Download fixture</a>
+
   <iframe id="test-frame" srcdoc="&lt;button id='frame-btn' onclick=&quot;document.getElementById('frame-result').textContent='frame-clicked'&quot;&gt;Click me&lt;/button&gt;&lt;div id='frame-result'&gt;&lt;/div&gt;"></iframe>
 
   <div id="drag-source">Drag</div>
@@ -53,6 +55,10 @@
   <p id="scroll-target">Scroll target</p>
 
   <script>
+    document.getElementById("download-link").href = URL.createObjectURL(
+      new Blob(["fixture download payload\n"], { type: "text/plain" })
+    );
+
     document.cookie = "fixture=test-value; path=/";
     console.log("fixture-loaded");
 
